@@ -1,0 +1,635 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<microtronic_instruction_set machine="Busch Microtronic 2090" source="Busch_Microtronic_2090_Manual_EN_Extracted.pdf" scope="instruction set commands documented in the source; command-code space 000-FFF" language="en" revision="16" version="21" supplemented_with="user clarifications, emulator tests, the Whac-a-Mole programming sessions (mole17 verified in the emulator), the owner's answers to the open questions (RET, MULT/DIV, HALT display, matrix rows, fixed programs, ADC/SUBC), the owner's RND counter and 1 Hz clock measurements (rnd-zaehler-protokoll.md) the ESP2090 Studio matrix protocol (github.com/rab-berlin/ESP2090, docs/LED-Matrix.md, firmware main.py and matrix_draw.py) and the emulator versions up to microtronic-21.py">
+  <category name="two_address_commands" code_pattern="0sd-9nd, Asd" />
+  <command code="0sd" mnemonic="MOV" category="two-address">
+    <function>The content of register s is moved (stored) into register d.</function>
+    <syntax>MOV s,d</syntax>
+    <operation>R[d] = R[s]</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <notes>s and d are hexadecimal register addresses.</notes>
+    <clarification status="manual">Sets the zero flag from the moved value, so BRZ after MOV tests whether R[s] was 0. Carry is unchanged.</clarification>
+  </command>
+  <command code="1nd" mnemonic="MOVI" category="two-address">
+    <function>The constant n is stored in register d.</function>
+    <syntax>MOVI n,d</syntax>
+    <operation>R[d] = n</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="manual">Immediate forms (MOVI ANDI ADDI SUBI CMPI): the constant n is the FIRST hex digit, the register d the SECOND. MOVI 5,1 is 151, not 115.</clarification>
+    <clarification status="manual">Sets the zero flag from the stored constant.</clarification>
+  </command>
+  <command code="2sd" mnemonic="AND" category="two-address">
+    <function>Logical AND combination of register s with register d; result remains in d.</function>
+    <syntax>AND s,d</syntax>
+    <operation>R[d] = R[d] AND R[s]</operation>
+    <carry_flag>0 (always reset)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+  </command>
+  <command code="3nd" mnemonic="ANDI" category="two-address">
+    <function>Logical AND combination of constant n with register d; result remains in d.</function>
+    <syntax>ANDI n,d</syntax>
+    <operation>R[d] = R[d] AND n</operation>
+    <carry_flag>0 (always reset)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="tested">Typical use: bit masks, e.g. ANDI 7,d clears the msb (bit 4); ANDI 1,d keeps only bit 1.</clarification>
+  </command>
+  <command code="4sd" mnemonic="ADD" category="two-address">
+    <function>Add register s to register d; result remains in d.</function>
+    <syntax>ADD s,d</syntax>
+    <operation>R[d] = (R[d] + R[s]) mod 16; carry = 1 if the sum exceeds F</operation>
+    <carry_flag>0 if no carry; 1 if carry (overflow)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+  </command>
+  <command code="5nd" mnemonic="ADDI" category="two-address">
+    <function>Add constant n to register d; result remains in d.</function>
+    <syntax>ADDI n,d</syntax>
+    <operation>R[d] = (R[d] + n) mod 16; carry = 1 if the sum exceeds F</operation>
+    <carry_flag>0 if no carry; 1 if carry (overflow)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="tested">ADDI F,d adds 15, i.e. subtracts 1 modulo 16, but the carry behaves like an addition (set unless R[d] was 0).</clarification>
+  </command>
+  <command code="6sd" mnemonic="SUB" category="two-address">
+    <function>Subtract the content of register s from register d; result remains in d.</function>
+    <syntax>SUB s,d</syntax>
+    <operation>R[d] = (R[d] - R[s]) mod 16; carry = 1 if the result was negative (borrow)</operation>
+    <carry_flag>0 if no carry; 1 if carry (underflow)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+  </command>
+  <command code="7nd" mnemonic="SUBI" category="two-address">
+    <function>Subtract constant n from register d; result remains in d.</function>
+    <syntax>SUBI n,d</syntax>
+    <operation>R[d] = (R[d] - n) mod 16; carry = 1 if the result was negative (borrow)</operation>
+    <carry_flag>0 if no carry; 1 if carry (underflow)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="tested">Counting loop idiom: SUBI 1,d sets carry when d was 0 (underflow) and the zero flag when d reaches 0.</clarification>
+  </command>
+  <command code="8sd" mnemonic="CMP" category="two-address">
+    <function>Compare registers s and d; neither register changes.</function>
+    <syntax>CMP s,d</syntax>
+    <operation>carry = (R[s] &lt; R[d]); zero = (R[s] == R[d]); no register changes</operation>
+    <carry_flag>0 if s &gt;= d; 1 if s &lt; d</carry_flag>
+    <zero_flag>0 if s != d; 1 if s = d</zero_flag>
+    <clarification status="manual">Unsigned comparison of the 4-bit values. Both flags are defined by the manual; BRC after CMP branches if s &lt; d, BRZ if s = d.</clarification>
+  </command>
+  <command code="9nd" mnemonic="CMPI" category="two-address">
+    <function>Compare constant n with register d; register d does not change.</function>
+    <syntax>CMPI n,d</syntax>
+    <operation>carry = (n &lt; R[d]); zero = (n == R[d]); no register changes</operation>
+    <carry_flag>0 if n &gt;= d; 1 if n &lt; d</carry_flag>
+    <zero_flag>0 if n != d; 1 if n = d</zero_flag>
+    <clarification status="tested">CMPI 7,d sets carry exactly when register d is 8..F, i.e. when the msb (bit 4) is set; CMPI 0,d sets carry when d is not 0.</clarification>
+    <clarification status="tested">Often used to test a bit without destroying the register: CMPI 7,d followed by ADC x adds the msb of d to x.</clarification>
+  </command>
+  <command code="Asd" mnemonic="OR" category="two-address">
+    <function>Logical OR combination of register s with register d; result remains in d.</function>
+    <syntax>OR s,d</syntax>
+    <operation>R[d] = R[d] OR R[s]</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="tested">There is no ORI. An OR chain over several registers followed by BRZ tests whether all of them are 0.</clarification>
+  </command>
+  <category name="jump_and_branch_commands" code_pattern="Baa-Eaa" />
+  <command code="Baa" mnemonic="CALL" category="jump/branch">
+    <function>Jump from the main program to subprogram starting at address aa; subprogram ends with RET (F07).</function>
+    <syntax>CALL aa</syntax>
+    <operation>return_address = address_of_next_command; PC = aa</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <notes status="superseded" correction="See clarification: nesting simply replaces the single return address.">The manual warns not to place a CALL command inside a subprogram, otherwise an endless loop arises; other jump commands may jump into another subprogram.</notes>
+    <clarification status="user">There is exactly one return address (stack depth 1). A CALL inside a subroutine simply replaces the stored return address; this is a legal technique, not an error. The manual's warning about an endless loop is misleading: RET then returns to the command after the most recent CALL.</clarification>
+  </command>
+  <command code="Caa" mnemonic="GOTO" category="jump/branch">
+    <function>Jump to address aa.</function>
+    <syntax>GOTO aa</syntax>
+    <operation>PC = aa</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+  </command>
+  <command code="Daa" mnemonic="BRC" category="jump/branch">
+    <function>Jump to address aa if carry flag is set (1).</function>
+    <syntax>BRC aa</syntax>
+    <operation>if carry == 1: PC = aa</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+  </command>
+  <command code="Eaa" mnemonic="BRZ" category="jump/branch">
+    <function>Jump to address aa if zero flag is set (1).</function>
+    <syntax>BRZ aa</syntax>
+    <operation>if zero == 1: PC = aa</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+  </command>
+  <category name="one_address_commands" code_pattern="F7d-FCd" correction="The original extract said 'F7d- FAd'; the one-address commands are F7d-FCd (MAS INV SHR SHL ADC SUBC). FDd, FEs, FFd are the I/O commands listed separately." />
+  <command code="F7d" mnemonic="MAS" category="one-address">
+    <function>Store the content of working register d in the memory register at the same address; d remains unchanged.</function>
+    <syntax>MAS d</syntax>
+    <operation>M[d] = R[d]</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <clarification status="manual">Memory registers can only be written by MAS and only be read by swapping with EXRL/EXRM. No other command addresses them.</clarification>
+    <clarification status="tested">MAS followed by EXRM keeps a copy of a register while the other registers of the 8-F block are swapped out.</clarification>
+  </command>
+  <command code="F8d" mnemonic="INV" category="one-address">
+    <function>Invert the bits of register d (0 becomes 1; 1 becomes 0).</function>
+    <syntax>INV d</syntax>
+    <operation>R[d] = NOT R[d] (4 bits)</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="tested">There is no XOR command. a XOR b can be built as (a OR b) AND NOT (a AND b) with copies, AND, OR and INV.</clarification>
+  </command>
+  <command code="F9d" mnemonic="SHR" category="one-address">
+    <function>Shift the content of register d right; the shifted-out bit is loaded into carry.</function>
+    <syntax>SHR d</syntax>
+    <operation>carry = bit 1 (lsb); R[d] = R[d] &gt;&gt; 1; bit 4 becomes 0</operation>
+    <carry_flag>shifted-out bit</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="user">Direction follows binary notation with the msb (bit 4) on the left. On the LED matrix bit 4 is the right-most LED, so SHR moves lit LEDs to the left.</clarification>
+  </command>
+  <command code="FAd" mnemonic="SHL" category="one-address">
+    <function>Shift the content of register d left; the shifted-out bit is loaded into carry.</function>
+    <syntax>SHL d</syntax>
+    <operation>carry = bit 4 (msb); R[d] = (R[d] &lt;&lt; 1) and F; bit 1 becomes 0</operation>
+    <carry_flag>shifted-out bit</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="user">Direction follows binary notation with the msb (bit 4) on the left. On the LED matrix bit 4 is the right-most LED, so SHL moves lit LEDs to the right.</clarification>
+    <clarification status="tested">Rotate a nibble left by one bit: SHL d followed by ADC d (the shifted-out msb is added back at bit 1). Counting bits: SHL c; ADC a adds the msb of c to a.</clarification>
+  </command>
+  <command code="FBd" mnemonic="ADC" category="one-address">
+    <function>Add the carry flag value (0 or 1) to register d.</function>
+    <syntax>ADC d</syntax>
+    <operation>R[d] = (R[d] + carry) mod 16; carry = 1 if the sum exceeded F</operation>
+    <carry_flag>0 if no carry; 1 if carry (overflow)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="user">Confirmed: the register itself can trigger a carry again. The new carry is the overflow of this addition (R[d] + carry above F): ADC on F with carry 1 gives 0 and carry 1.</clarification>
+  </command>
+  <command code="FCd" mnemonic="SUBC" category="one-address">
+    <function>Subtract the carry flag value (0 or 1) from register d.</function>
+    <syntax>SUBC d</syntax>
+    <operation>R[d] = (R[d] - carry) mod 16; carry = 1 if the result was negative</operation>
+    <carry_flag>0 if no carry; 1 if carry (overflow)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="user">Confirmed: the new carry is the underflow (borrow) of this subtraction (manual wording: 'overflow'): SUBC on 0 with carry 1 gives F and carry 1.</clarification>
+  </command>
+  <category name="input_output_commands" code_pattern="FDd, FEs, FFd" />
+  <command code="FDd" mnemonic="DIN" category="input/output">
+    <function>Store the information present at the four inputs in register d.</function>
+    <syntax>DIN d</syntax>
+    <operation>R[d] = value of inputs 1-4 (bit i = input i), sampled once at this moment</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <notes>Pay attention to correct wiring of the inputs.</notes>
+    <clarification status="user">DIN reads the inputs only once when it executes. A cable can connect an output to an input; DIN then reads back the value last latched by DOT (used as a 4-bit scratch memory that survives register changes).</clarification>
+    <clarification status="tested">Peripheral handshake idiom: DIN d; ANDI 1,d; BRZ (back to DIN) waits until input bit 1 is high.</clarification>
+  </command>
+  <command code="FEs" mnemonic="DOT" category="input/output">
+    <function>Bring the content of register s to the outputs; the value is displayed in binary by the four LEDs and remains at the outputs until the next DOT command.</function>
+    <syntax>DOT s</syntax>
+    <operation>outputs = R[s] (4 bits)</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value in register s is 0, otherwise 0</zero_flag>
+    <clarification status="user">The outputs keep the value until the next DOT command (latched). Bits are numbered 1-4, bit 4 is the msb (value 8).</clarification>
+    <clarification status="user">The manual's zero-flag text says 'd' but means the source register s: zero = 1 if the value in register s is 0. Carry is reset (manual).</clarification>
+  </command>
+  <command code="FFd" mnemonic="KIN" category="input/output">
+    <function>Interrupt program execution until a hexadecimal digit is entered via the keyboard; store the digit in register d.</function>
+    <syntax>KIN d</syntax>
+    <operation>wait for a hexadecimal key; R[d] = key value</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag manual_text="0 if d=1..F; 1 if d=0" status="user">1 if the value stored in register d is 0 after the command, otherwise 0</zero_flag>
+    <clarification status="user">The program stops until a key is pressed. Only the hex keys 0-F are accepted as input; all function keys stay active while the program simply waits.</clarification>
+    <clarification status="user">Measured (rnd-zaehler-protokoll.md, K1/K2): while KIN waits the RND counter runs in real time at about 205 steps per second, as in idle; KIN itself counts +3 like every command. The waiting time is the only random source for RND.</clarification>
+  </command>
+  <category name="display_command" code_pattern="Fns" />
+  <command code="Fns" mnemonic="DISP" category="display">
+    <function>Display the content of register s at the right display position; n specifies how many register positions are displayed.</function>
+    <syntax>DISP n,s</syntax>
+    <operation>show registers s, s+1, ... s+n-1 with R[s] at the right-most digit (wrap from F to 0)</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <notes>n must be 1..6. n+s may be at most F; if n+s exceeds F, surplus registers are also displayed beginning with register 0. The manual's example is DISP 3,2 = F32.</notes>
+    <clarification status="user">DISP stays active and LIVE: the display follows the register contents while the program runs, until another DISP, a DISOUT or a HALT occurs. After HALT (key or command) the display shows address and command instead.</clarification>
+    <clarification status="tested">Code F n s: DISP 3,2 = F32. n = 0 would collide with the special commands F0x, so n is 1..6; F7x-FFx are the other one-address and I/O commands.</clarification>
+    <clarification status="user">Measured: the display state (default display, DISOUT, DISP 1, DISP 6) does not change how far the RND counter advances per command (always +3), although the command time differs.</clarification>
+  </command>
+  <category name="special_commands" code_pattern="F00-F0F" />
+  <command code="F00" mnemonic="HALT" category="special">
+    <function interpretation="RUN starts at the displayed address; if that address holds the HALT command itself, pressing RUN would halt again, which would explain the manual's STEP first (not confirmed).">Stop program execution; the display shows the stop address and F00. To restart, press STEP then RUN.</function>
+    <syntax>HALT</syntax>
+    <operation>stop program execution</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <clarification status="user">HALT (command or HALT key) always ends a running program; the machine then waits for further key input. The display then shows the address and the command at that address, regardless of what the display showed before (an active DISP ends).</clarification>
+    <clarification status="user">Confirmed: display layout after HALT is two address digits, a blank, three command digits.</clarification>
+  </command>
+  <command code="F01" mnemonic="NOP" category="special">
+    <function>No operation; only the address is increased by 1. The command can later be replaced by another command.</function>
+    <syntax>NOP</syntax>
+    <operation>no operation</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+  </command>
+  <command code="F02" mnemonic="DISOUT" category="special">
+    <function>Switch off the display; command execution speed increases.</function>
+    <syntax>DISOUT</syntax>
+    <operation>display off</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <clarification status="user">A later DISP switches the display on again (DISP stays active until DISP/DISOUT/HALT).</clarification>
+  </command>
+  <command code="F03" mnemonic="HXDZ" category="special">
+    <function>Convert the hexadecimal number in registers D, E, F to decimal; result remains in D, E, F, with D=ones, E=tens, F=hundreds. Input must not exceed 3E7.</function>
+    <syntax>HXDZ</syntax>
+    <operation>decimal digits of hex number (F,E,D) -&gt; D,E,F</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag>0 if hex number &lt;= 3E7; 1 if &gt; 3E7 (range overflow)</zero_flag>
+    <notes>The manual says the command fundamentally always uses registers D, E and F.</notes>
+    <clarification status="user" correction="Earlier revisions marked this as assumed.">Input: the hexadecimal number is F E D with F as the most significant digit and D as the least significant digit. Confirmed indirectly by the counter measurement below (the counter holds exactly F E D - 3E8 after an overflow).</clarification>
+    <clarification status="user">If the number exceeds 3E7 (decimal 999), registers D, E and F are set to 0 (the manual additionally sets zero = 1, carry = 0).</clarification>
+    <clarification status="user">Measured (rnd-zaehler-protokoll.md, X5/X6): HXDZ uses the RND counter as working storage. Input up to 3E7: afterwards the counter is FFF (counted down below 000), a RND directly after HXDZ reads 002. Input above 3E7: the counter holds input - 3E8 (modulo 1000 hex), e.g. FF0 gives C08, a RND directly after reads C0B. Then the counter continues normally (+3 per command).</clarification>
+  </command>
+  <command code="F04" mnemonic="DZHX" category="special">
+    <function>Convert the decimal number in registers D, E, F to hexadecimal; result remains in D, E, F, with D=ones, E=tens, F=hundreds.</function>
+    <syntax>DZHX</syntax>
+    <operation>decimal digits (F,E,D) -&gt; hex number in F,E,D</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag>0 (reset)</zero_flag>
+    <notes>The manual notes that time errors can occur in the clock program.</notes>
+    <clarification status="assumed">Input digits must be 0-9; behaviour for A-F is undocumented.</clarification>
+    <clarification status="user">Measured (rnd-zaehler-protokoll.md, X7): DZHX uses the RND counter as working storage and leaves it at 999 (counted down decimally below 000), independent of the input (999 and 123 tested); a RND directly after reads 99C. The emulator does the same for digits A-F (assumed).</clarification>
+  </command>
+  <command code="F05" mnemonic="RND" category="special">
+    <function>Copy the value of the internal counter into registers D, E, F as a random-generator value.</function>
+    <syntax>RND</syntax>
+    <operation>D,E,F = value of the internal counter (three hex digits; F most significant)</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <notes>The source labels this command RND / random generator.</notes>
+    <clarification status="inferred">The manual describes the source as an internal counter, so RND is a pseudo-random value that depends on when it executes. Dice idiom used by the Ludo program: RND; CMPI 5,D; BRC (repeat RND); ADDI 1,D gives 1..6 (D = 0..5 accepted, 6..15 rejected).</clarification>
+    <clarification status="user">On the real machine RND reads a running counter: two RND executed a fixed number of commands apart always differ by the same value (measured by the owner, Blackjack sessions). Only the moment of a key press (KIN) is random; values drawn without a key press in between depend on each other. See idiom rnd_counter_mixing.</clarification>
+    <clarification status="user">Measured counter model (rnd-zaehler-protokoll.md, 2026-11-06): see machine_overview item rnd_counter. RND reads the counter at the start of the command (afterwards +3 as for every command), stores it with F = high, E = middle, D = low nibble, and RESET sets it to 000.</clarification>
+    <clarification status="tested">Emulator (version 16): default mode Zaehler follows the measured model; key u switches to Zufall (three random hex digits, the behaviour up to version 15) and back.</clarification>
+  </command>
+  <command code="F06" mnemonic="TIME" category="special">
+    <function>Load the operating-system clock into registers A-F: A=seconds units, B=seconds tens, C=minutes units, D=minutes tens, E=hours units, F=hours tens.</function>
+    <syntax>TIME</syntax>
+    <operation>A..F = clock (see function)</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <notes>Valid time is loaded only when TIME executes; the clock output must be connected with input 4; time can be entered with PGM 3.</notes>
+    <clarification status="user">The clock of the emulator runs on the system time by default (PGM 3 sets another time, see fixed_programs). The emulator's TIME does not require the cable output 4 -> input 4.</clarification>
+  </command>
+  <command code="F07" mnemonic="RET" category="special">
+    <function>Return from a subprogram to the address immediately after the CALL command.</function>
+    <syntax>RET</syntax>
+    <operation>PC = return_address</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <clarification status="user" correction="Earlier revisions said RET without CALL jumps to 00.">The return register initially holds the call address 00 (as if a CALL had been executed at address 00). RET jumps to the call address + 1, so RET without a preceding real CALL jumps to address 01.</clarification>
+    <clarification status="user">RET does not clear the return address: repeated RETs always jump to the last known return address. The address is only overwritten by a CALL. (The emulator stores the address behind the CALL, initially 01.)</clarification>
+  </command>
+  <command code="F08" mnemonic="CLEAR" category="special">
+    <function>Set working registers to 0; memory registers are not affected.</function>
+    <syntax>CLEAR</syntax>
+    <operation>R0..RF = 0; carry = 0; zero = 1</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag>1 (set)</zero_flag>
+  </command>
+  <command code="F09" mnemonic="STC" category="special">
+    <function>Set the carry flag.</function>
+    <syntax>STC</syntax>
+    <operation>carry = 1</operation>
+    <carry_flag>1 (set)</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <clarification status="tested">Together with RSC useful to force the carry before ADC/SUBC/BRC.</clarification>
+  </command>
+  <command code="F0A" mnemonic="RSC" category="special">
+    <function>Reset the carry flag.</function>
+    <syntax>RSC</syntax>
+    <operation>carry = 0</operation>
+    <carry_flag>0 (reset)</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+  </command>
+  <command code="F0B" mnemonic="MULT" category="special">
+    <function>Multiply working registers 0-5 by corresponding memory registers, decimal result in working registers 0-5. On overflow, E appears in all registers 0-5.</function>
+    <syntax>MULT</syntax>
+    <operation>decimal: R0-R5 = (R0-R5) * (M0-M5)</operation>
+    <carry_flag>0 if result correct; 1 if overflow or hexadecimal input A-F</carry_flag>
+    <zero_flag>0 (reset)</zero_flag>
+    <notes>If multiplying shorter numbers, higher registers through 5 must be zero in working and memory registers.</notes>
+    <clarification status="assumed">Digit order: register 0 holds the ones, register 5 the hundred-thousands; the same for the memory registers (little-endian digits). The result is a 6-digit decimal number; more than 999999 gives E in R0-R5 and carry = 1.</clarification>
+    <clarification status="user">If an operand is not decimal (a digit A-F in R0-R5 or M0-M5), working and memory registers stay unchanged and only the carry flag is set (the emulator leaves the zero flag unchanged in this case, too).</clarification>
+    <clarification status="user">Measured (rnd-zaehler-protokoll.md, M1-M5): MULT uses the RND counter as a digit pointer. Afterwards it holds the index (0-5) of the highest non-zero digit of the multiplicand M0-M5, or 0 if M = 0 (M = 0: 000, M = 1: 000, M = 999: 002, M = 90000: 004); a RND directly after reads index + 3. The multiplier R0-R5 has no influence.</clarification>
+    <clarification status="assumed">Not measured: counter after an overflow (emulator: same rule as a correct result) and after a non-decimal operand (emulator: counter unchanged, only +3).</clarification>
+  </command>
+  <command code="F0C" mnemonic="DIV" category="special">
+    <function>Divide memory registers 0-3 by working registers 0-3 (4 places); quotient in working registers and remainders in memory registers. If calculation value is 0000, division aborts and E appears in working registers 0-5.</function>
+    <syntax>DIV</syntax>
+    <operation>decimal: R0-R3 = (M0-M3) / (R0-R3); M0-M3 = remainder</operation>
+    <carry_flag>0 if result correct; 1 if divisor is 0 or hex input A-F</carry_flag>
+    <zero_flag>0 if no remainder; 1 if remainder</zero_flag>
+    <notes>Working and memory registers 4 and 5 must be 0, although unused.</notes>
+    <clarification status="assumed">Digit order is little-endian (register 0 = ones), 4 digits. The dividend is in the memory registers, the divisor in the working registers; the quotient replaces the divisor in R0-R3.</clarification>
+    <clarification status="user">If an operand is not decimal (a digit A-F in R0-R3 or M0-M3), working and memory registers stay unchanged and only the carry flag is set.</clarification>
+    <clarification status="user">If the divisor is 0, all 6 working registers R0-R5 are set to E and the carry flag is set (memory registers unchanged).</clarification>
+    <clarification status="assumed">If an operand is not decimal and the divisor is 0 at the same time, the non-decimal rule applies first (registers unchanged). The zero flag is left unchanged in both error cases.</clarification>
+    <clarification status="user">Measured (rnd-zaehler-protokoll.md, V1-V4): DIV uses the RND counter. After a correct division it is always 100 (9999/1, 9999/2, 8/1 tested; a RND directly after reads 103), after a division by 0 it is 000 (RND reads 003).</clarification>
+    <clarification status="assumed">Not measured: counter after a non-decimal operand (emulator: counter unchanged, only +3).</clarification>
+  </command>
+  <command code="F0D" mnemonic="EXRL" category="special">
+    <function>Exchange working registers 0-7 with memory registers 0-7.</function>
+    <syntax>EXRL</syntax>
+    <operation>swap R0..R7 with M0..M7</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <clarification status="tested">Used to reach the memory registers: after EXRL the commands operate on the former M0-M7 and the old working registers sit in M0-M7.</clarification>
+  </command>
+  <command code="F0E" mnemonic="EXRM" category="special">
+    <function>Exchange working registers 8-F with memory registers 8-F.</function>
+    <syntax>EXRM</syntax>
+    <operation>swap R8..RF with M8..MF</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <clarification status="tested">Scratch-register trick: MAS some registers, EXRM, work, EXRM again - the swapped-out registers are saved in M8-MF while their working-register positions serve as free scratch space.</clarification>
+  </command>
+  <command code="F0F" mnemonic="EXRA" category="special">
+    <function>Exchange working registers 0-7 with working registers 8-F (0↔8, 1↔9, etc.).</function>
+    <syntax>EXRA</syntax>
+    <operation>swap R0..R7 with R8..RF (0&lt;-&gt;8, 1&lt;-&gt;9, ...)</operation>
+    <carry_flag>unchanged</carry_flag>
+    <zero_flag>unchanged</zero_flag>
+    <clarification status="user">Measured (rnd-zaehler-protokoll.md, X10-X10d): EXRA sets the two upper nibbles of the RND counter to 7 and 0; the lowest nibble is kept and counts on. Order: first 70 is written, then the normal +3 (with carry into the middle nibble), e.g. counter 20F before EXRA gives 712 at the next RND. Independent of all register contents. EXRL and EXRM leave the counter alone.</clarification>
+  </command>
+  <status_legend>
+    <status name="manual">stated by the manual extract</status>
+    <status name="user">confirmed by the user (owner of the real machine)</status>
+    <status name="tested">verified in the emulator against known programs / a reference implementation; not checked on real hardware</status>
+    <status name="inferred">derived from analysis of working programs</status>
+    <status name="assumed">emulator assumption, not documented</status>
+    <status name="simulated">derived from the Whac-a-Mole programs (mole01-mole17); checked only in a Python model written during the sessions, not in the emulator and not on the real machine</status>
+    <status name="unknown">open question, test on the real machine</status>
+  </status_legend>
+  <code_space_map note="All 4096 command codes are assigned; there are no undefined opcodes.">
+    <range code="0sd" mnemonic="MOV" codes="256" />
+    <range code="1nd" mnemonic="MOVI" codes="256" />
+    <range code="2sd" mnemonic="AND" codes="256" />
+    <range code="3nd" mnemonic="ANDI" codes="256" />
+    <range code="4sd" mnemonic="ADD" codes="256" />
+    <range code="5nd" mnemonic="ADDI" codes="256" />
+    <range code="6sd" mnemonic="SUB" codes="256" />
+    <range code="7nd" mnemonic="SUBI" codes="256" />
+    <range code="8sd" mnemonic="CMP" codes="256" />
+    <range code="9nd" mnemonic="CMPI" codes="256" />
+    <range code="Asd" mnemonic="OR" codes="256" />
+    <range code="Baa" mnemonic="CALL" codes="256" />
+    <range code="Caa" mnemonic="GOTO" codes="256" />
+    <range code="Daa" mnemonic="BRC" codes="256" />
+    <range code="Eaa" mnemonic="BRZ" codes="256" />
+    <range code="F00-F0F" mnemonic="special commands (HALT NOP DISOUT HXDZ DZHX RND TIME RET CLEAR STC RSC MULT DIV EXRL EXRM EXRA)" codes="16" />
+    <range code="F1s-F6s" mnemonic="DISP n,s with n = 1..6" codes="96" />
+    <range code="F7d" mnemonic="MAS" codes="16" />
+    <range code="F8d" mnemonic="INV" codes="16" />
+    <range code="F9d" mnemonic="SHR" codes="16" />
+    <range code="FAd" mnemonic="SHL" codes="16" />
+    <range code="FBd" mnemonic="ADC" codes="16" />
+    <range code="FCd" mnemonic="SUBC" codes="16" />
+    <range code="FDd" mnemonic="DIN" codes="16" />
+    <range code="FEs" mnemonic="DOT" codes="16" />
+    <range code="FFd" mnemonic="KIN" codes="16" />
+  </code_space_map>
+  <machine_overview>
+    <item key="word_size" status="user">4 bit. Registers, constants and inputs/outputs are hexadecimal digits 0-F; bits are numbered 1-4 with bit 4 = msb (value 8) and bit 1 = lsb.</item>
+    <item key="architecture" status="user">Harvard architecture: program memory is separate from the registers. Registers can only be accessed by commands; there is no indirect addressing, no pointer register, no stack and program code cannot be read or modified as data.</item>
+    <item key="program_memory" status="user">256 program steps at addresses 00-FF, one 3-hex-digit command per step. All unprogrammed addresses contain 000 (= MOV 0,0); empty cells do not exist.</item>
+    <item key="address_wrap" status="user">After address FF the program continues at address 00.</item>
+    <item key="registers" status="manual">16 working registers R0-RF and 16 memory registers M0-MF. All arithmetic, logic, shift, compare and I/O commands address working registers only. Memory registers are written by MAS and exchanged with working registers by EXRL, EXRM (and EXRA exchanges within the working registers).</item>
+    <item key="power_on_state" status="user" correction="Up to revision 14: all registers 0.">After power-on and after RESET the working register RF holds F; all other working registers R0-RE and all memory registers M0-MF are 0 (owner, 2026-11-07). Programs that rely on a zero RF at start (e.g. a counter or an account in D E F) must clear it first (MOVI 0,F). The emulator does the same since version 20 (start and reset z).</item>
+    <item key="flags" status="manual">Carry flag and zero flag. See flag_conventions.</item>
+    <item key="subroutines" status="user">One return address only (stack depth 1). CALL stores the address of the next command and overwrites any previous value, also inside a subroutine; RET jumps to it. The return register starts with the call address 00, so RET without a real CALL jumps to address 01. RET does not clear the return address: repeated RETs jump to the last known return address again.</item>
+    <item key="execution_speed" status="user">9.3 ms per command with the display switched off (after DISOUT). With the display on, execution is slower: +3.7 ms for the first displayed digit and +2.5 ms for each further digit, so DISP 1 = 13.0 ms, DISP 2 = 15.5 ms, ... DISP 6 = 25.5 ms per command. Until a DISP command has been executed the display shows the currently executed address, a blank and the command, and a command takes 20.5 ms. The earlier figure 'about 9 ms' is the display-off value.</item>
+    <item key="execution_speed_measured" status="user">Measured with the 1 Hz clock (rnd-zaehler-protokoll.md, series 5): a wait loop of DIN, CMPI, BRC and DIN, BRZ with the display off runs about 112.4 commands per second, i.e. about 8.9 ms per command instead of 9.3 ms. Either these commands are a little faster or the RC clock of this machine ran slightly faster than at the earlier measurement. The RC clock is very stable over seconds (less than one command in 4 s, below 0.2 percent). The emulator keeps 9.3 ms.</item>
+    <item key="clock_1hz" status="user">The 1 Hz clock (used by TIME, connected to input 4) comes from its own 32768 Hz crystal and is independent of the TMS 1600, whose clock (about 670 kHz) is set by a resistor and a capacitor. The 1 Hz clock keeps running across RESET. Its edges therefore do not lie on a fixed command grid (measured: the number of commands between two rising edges alternates between neighbouring values) and the phase of the first edge after a program start is independent of the start time. See idioms clock_edge_wait and rnd_two_sources.</item>
+    <item key="rnd_counter" status="user">Measured by the owner on 2026-11-06 (25 command and display runs plus 48 special-command runs, rnd-zaehler-protokoll.md). The source of RND is a 12-bit counter (000-FFF, wraps). While a program runs it advances by exactly +3 per executed command, independent of the display state and of the command time (NOP, MOV, MOVI, ADDI, GOTO, CALL, RET, RND, MAS, DOT, DIN, TIME, EXRL, EXRM measured). Outside program execution (after RESET, in the HALT state, during key entry) and while KIN waits it advances in real time at about 205 steps per second (about 4.9 ms per step, one lap about 20 s). RESET sets it to 000; HALT, NEXT and RUN do not change it. RND reads it at the start of the command. HXDZ, DZHX, MULT, DIV and EXRA use it as working storage and leave a defined value (see these commands); afterwards it counts on with +3 per command. Consequence: without a key press in between, every RND follows from the previous one (3 x number of commands in between), and after HXDZ, DZHX, MULT or DIV it is fixed. Without key presses the only random sources are the start time and, once per program start, the phase of the 1 Hz clock (see clock_1hz); waiting for further clock edges adds no new randomness (measured, series 5). Not measured: AND, OR, SUB, CMP, BRC, BRZ, shifts, INV, ADC, SUBC, CLEAR, STC, RSC, DISP, DISOUT between two RND (expected +3).</item>
+    <item key="display" status="user">6-digit seven-segment display. DISP n,s shows n registers; the display is live until another DISP, a DISOUT or a HALT. After HALT it shows the address and the command at that address, regardless of the previous display contents. Without any DISP executed the display shows the currently executed address, a blank and the command (5 digits).</item>
+    <item key="display_state_interrupt" status="user">Both the HALT key and a breakpoint interrupt the current display state (DISP / DISOUT) and show the address and command (xx yyy). A program that is continued afterwards therefore runs with the default address/command display, i.e. at 20.5 ms per command, until it executes DISP or DISOUT again.</item>
+    <item key="outputs" status="user">4 TTL outputs with LEDs showing the value in binary. DOT latches the value until the next DOT.</item>
+    <item key="inputs" status="user">4 TTL inputs. DIN samples them once. A cable can connect an output to an input (e.g. output 4 to input 4; the clock for TIME is connected to input 4).</item>
+    <item key="keyboard" status="user">16 hex keys 0-F and 8 function keys: HALT, NEXT, RUN, STEP, REG, BKP, C/CE, PGM.</item>
+    <item key="fixed_programs" status="user">PGM 0-7 select fixed (built-in) programs: 0 hardware test, 1/2 cassette load/save (0-2 are omitted in the emulator), 3 sets the time, 4 shows the time, 5 clears the program memory to 000, 6 sets it to F01, 7 loads a Nim game (to be supplied). See fixed_programs.</item>
+  </machine_overview>
+  <keyboard_operation>
+    <step key="HALT" status="user">Always stops a running program; afterwards the machine waits for further key input. It interrupts the current display state (DISP/DISOUT) and shows address and command.</step>
+    <step key="goto_address" status="user">HALT NEXT aa (two hex digits) selects address aa.</step>
+    <step key="next_address" status="user">NEXT moves to the following address.</step>
+    <step key="enter_command" status="user">Select the address and type hex digits: the buffer shifts to the left and the typed key is inserted on the right. The command is stored only when NEXT is pressed; NEXT then shows the next address. The entry buffer exists separately from the content of the address: the stored command is not read into it.</step>
+    <step key="entry_buffer_details" status="assumed">Assumed: the buffer is empty at the start of each address (until a key is typed the display shows the stored command), only the last three typed digits count, a partially filled buffer is shown right-aligned, NEXT stores it with leading zeros, and NEXT without typing stores nothing.</step>
+    <step key="C/CE" status="user">Deletes the last typed digit; a second press deletes all three digits.</step>
+    <step key="RUN" status="user">Starts the program at the displayed address.</step>
+    <step key="STEP" status="user">Executes the program step by step.</step>
+    <step key="register" status="user">HALT REG r (r = 0-F) shows or changes the content of working register r.</step>
+    <step key="breakpoint" status="user">HALT BKP aa (two hex digits): the program is interrupted at address aa BEFORE the command in that line is executed. HALT BKP 00 clears the breakpoint. Like HALT, a breakpoint interrupts the current display state.</step>
+    <step key="fixed_program" status="user">HALT PGM n (n = 0-7) selects fixed program n (see fixed_programs).</step>
+    <step key="details_unconfirmed" status="assumed">Not confirmed on the real machine (emulator assumptions): in REG mode a digit overwrites the register at once and NEXT advances to the next register; only one breakpoint exists.</step>
+  </keyboard_operation>
+  <flag_conventions>
+    <rule key="zero_flag_shorthand" status="user">The manual writes 'zero flag: 0 if d=1..F; 1 if d=0'. This is shorthand for the VALUE in the destination register d after the command: zero = 1 if that value is 0, otherwise 0. It does not refer to the register number.</rule>
+    <rule key="data_moves" status="manual">MOV and MOVI leave carry unchanged but set the zero flag from the value that was stored. A BRZ right after MOV therefore tests the moved value.</rule>
+    <rule key="logic" status="manual">AND, ANDI, OR, INV, DIN, DOT, KIN reset the carry flag.</rule>
+    <rule key="arithmetic" status="manual">ADD/ADDI: carry = 1 if the sum exceeds F (result wraps modulo 16). SUB/SUBI: carry = 1 on borrow (result below 0 wraps modulo 16).</rule>
+    <rule key="carry_operand" status="user">ADC/SUBC add/subtract the carry flag; their own carry output is the overflow (ADC) or underflow (SUBC) of that operation, so the register can trigger a carry again (confirmed on the real machine).</rule>
+    <rule key="compare" status="manual">CMP/CMPI: carry = 1 if s (or n) is smaller than d, zero = 1 if they are equal; no register changes.</rule>
+    <rule key="shifts" status="manual">SHL/SHR load the shifted-out bit into carry (SHL: bit 4, SHR: bit 1) and fill with 0.</rule>
+    <rule key="branches" status="manual">BRC branches if carry = 1, BRZ if zero = 1; neither changes a flag. GOTO, CALL, RET, MAS, EXR*, NOP, DISP, DISOUT, HALT, RND, TIME leave both flags unchanged.</rule>
+    <rule key="flag_tests" status="tested">Useful tests: CMPI 0,d; BRC = d is not 0. CMPI 7,d; BRC = bit 4 of d is set. CMPI k,d; BRZ = d equals k.</rule>
+  </flag_conventions>
+  <program_file_format>
+    <item key="lines">One command per line as exactly three hex digits (000-FFF). Commands are loaded one after the other from address 00.</item>
+    <item key="ignored">Empty lines and lines that are not exactly three hex digits are ignored; text after ';' or '#' is a comment. Blank lines used for visual grouping do NOT advance the address.</item>
+    <item key="example">151   ; 00  MOVI 5,1</item>
+    <item key="extension">Standard extension .mic; .txt files can be loaded as well. The same line format is used for both.</item>
+    <item key="limits">At most 256 commands; unprogrammed addresses stay 000.</item>
+  </program_file_format>
+  <fixed_programs note="Built-in programs of the machine, selected with HALT PGM n. Descriptions as given by the owner; details marked assumed are emulator decisions.">
+    <program number="0" name="hardware test" status="user" emulator="omitted">Hardware test of the machine. Not part of the emulator.</program>
+    <program number="1" name="cassette load" status="user" emulator="omitted">Loads a program from cassette. Not part of the emulator.</program>
+    <program number="2" name="cassette save" status="user" emulator="omitted">Saves the program to cassette. Not part of the emulator.</program>
+    <program number="3" name="set time" status="user" emulator="implemented">Captures the time. The display shows hhmmss. Four digits (hhmm) are entered, shifting in from the right starting at the minutes. HALT ends the entry and starts the clock from that time on. The clock is read by TIME. In the emulator the clock runs on the system time by default.
+      <clarification status="assumed">Emulator details: seconds are set to 00; before the first digit the display shows the running clock; HALT without digits leaves the clock unchanged; an invalid time (hh above 23 or mm above 59) is refused and the entry restarts; Esc aborts; the clock keeps its setting across a reset (z); the program starts as soon as it is selected (no RUN needed).</clarification>
+    </program>
+    <program number="4" name="show time" status="user" emulator="implemented">Shows the time on all 6 display digits (hhmmss). The outputs show the seconds ones digit in binary.
+      <clarification status="assumed">Emulator details: the program starts as soon as it is selected and ends with HALT; the outputs are set directly (cables see them, the LED matrix is not notified, so it cannot read the seconds as frame data); program memory and registers are not touched.</clarification>
+    </program>
+    <program number="5" name="clear program memory" status="user" emulator="implemented">Deletes all commands and sets every address to 000. Emulator: the address is set to 00; registers are not touched (assumed).</program>
+    <program number="6" name="fill with NOP" status="user" emulator="implemented">Deletes all commands and sets every address to F01 (NOP). Emulator: the address is set to 00; registers are not touched (assumed).</program>
+    <program number="7" name="Nim game" status="user" emulator="pending">Loads a Nim game into the program memory. The program listing will be supplied by the owner; the emulator table FIXED_PROGRAMS is empty until then.</program>
+  </fixed_programs>
+  <peripherals>
+    <led_matrix_8x8 status="user" description="The owner's 8x8 LED matrix, driven through the 4 outputs and 4 inputs. Arranged like a coordinate system.">
+      <protocol key="esp2090" status="user" source="ESP2090 docs/LED-Matrix.md, firmware/main.py matrix_task, firmware/matrix_draw.py">Current protocol of the ESP2090 Studio (the matrix is driven by an ESP32 that also offers a web UI; 'LED on' in the web UI switches it on). The older items below (transfer_protocol, frame_timing, readiness, toggle_signal, toggle_scope) describe the earlier block protocol used by Game of Life, Tetris, Snake, Springer, Invaders and Whac-a-Mole; the ESP2090 firmware does not implement it.
+        <item key="planes">The ESP keeps two planes of 64 entries, index y*8 + x (x = column 0 left ... 7 right, y = row 0 bottom ... 7 top): the bit matrix (pixel on/off) and the color matrix (palette number 0-15, initially 1 = red everywhere). Visible: pixel on = its color, pixel off = dark.</item>
+        <item key="handshake">REQ/ACK: the ESP sets input 1 = 1 (REQ). It accepts an ACK only after the outputs have been 0 once. The 2090 waits with DIN r; ANDI 1,r; BRZ and then outputs the command number 1-15 with DOT (ACK). The ESP takes the first non-zero value, reads again 0.7 ms later (the 2090 switches its four outputs one after another, about 138 us rising, 166 us falling) and drops REQ immediately. Without ACK REQ goes low after 30 ms; an ACK up to 70 ms after REQ is still accepted (the 2090 may have seen REQ just before the timeout and needs up to 3 steps); then 20 ms pause and a new REQ. After every transfer the ESP pauses 10 ms before the next REQ; a value left on the outputs is not read twice (outputs must go to 0 first).</item>
+        <item key="timing">All transfers require DISOUT (9.3 ms per command). The ESP reads at fixed times relative to the control read (ack_time = first edge + 0.7 ms): ACK 1 (block mode): exactly ONE command between the ACK and the first register (usually EXRL); register k is read at ack_time + 13.5 ms + 9.217 ms * (k + 1), the first one about 23.4 ms after the ACK. ACK 2-15 (draw mode): the nibbles follow directly in the next steps, read at ack_time + 13.5 ms + 9.217 ms * k (about 14.2 ms after the ACK, i.e. in the middle of the next step). Nibbles per ACK: 0,16,0,1,2,0,2,2,2,0,2,1,0,1,1,1 (ACK 0-15).</item>
+        <item key="block_mode">ACK 1, then 16 nibbles R0-RF into the bit matrix: register k sets the pixels 4k..4k+3, rows from bottom to top, even register = left half, bit 0 (value 1) = left pixel of the half (same layout as the older protocol). The color matrix is not changed. Send routine: wait for REQ; DOT ACK(=1); EXRL; DOT R0 ... DOT RF; EXRL; DOT (a register with 0); RET.</item>
+        <item key="draw_commands">ACK 3 a: whole matrix in drawing type a. ACK 4 x,y: cursor 1 and point. ACK 6 x,y: cursor 2 and filled rectangle between the cursors. ACK 7 x,y: cursor 2 and rectangle frame. ACK 8 x,y: cursor 2 and line (Bresenham), then cursor 1 = cursor 2 (polyline). ACK 10 k,w: the four pixels of block register k = bits of w. ACK 11 r: shift bit and color matrix, r &amp; 3: 0 left, 1 right, 2 up, 3 down, +8 with wrap-around; without wrap the vacated pixels are switched off and keep their color. ACK 13 w: stack. ACK 14 f: active color f. ACK 15 w: display 1 toggle, 2 on, 3 off (drawing continues in memory). ACK 2, 5, 9, 12 are ignored (reserved).</item>
+        <item key="drawing_type">For ACK 4, 6, 7, 8 the 4th bit (value 8) of x and y selects the drawing type: art = (x div 8) + 2 * (y div 8). 0: color matrix = active color, bits unchanged (set cursor 1 silently, prepare colors). 1: color = active color and bit on (off for color 0 black) - normal drawing. 2: bit on, color unchanged (show an area). 3: bit off, color unchanged (hide an area). For ACK 3 the nibble is the drawing type directly (ACK 3,1 fills, ACK 3,3 clears and keeps the colors).</item>
+        <item key="stack">ACK 13 w: one stack of 8 slots each for the color matrix (bit 0 of w) and the bit matrix (bit 1); action w div 4: 0 push (full: the oldest entry is dropped), 1 pop, 2 peek, 3 clear. Pop/peek on an empty stack change nothing.</item>
+        <item key="redraw">The LEDs are updated only when a command requires it (matrix_draw returns True): block frames, ACK 10, 11, 15 and ACK 3/4/6/7/8 with drawing type != 0. ACK 14, drawing type 0 and the stack (ACK 13) change only the memory; the result becomes visible with the next redraw.</item>
+        <item key="palette">Colors 0-15: schwarz, rot, orange, gelb, gruen, tuerkis, blau, violett, magenta, weiss, dunkelrot, dunkelgruen, dunkelblau, oliv, rosa, grau. Firmware RGB (brightness 0-10): (0,0,0) (10,0,0) (10,4,0) (10,10,0) (0,8,0) (0,8,6) (0,0,10) (6,0,10) (10,0,6) (10,10,10) (3,0,0) (0,3,0) (0,0,3) (3,3,0) (10,3,3) (3,3,3). A userscript can change them (setPalette) or fill the color matrix (setColors, top row first).</item>
+        <item key="draw_routine">One routine serves all draw commands (ACK in R1, nibbles in R2, R3): cmd: DISOUT; warte: DIN R0; ANDI 1,R0; BRZ warte; DOT R1; DOT R2; DOT R3; MOVI 0,R0; DOT R0; RET. Entries per command: MOVI ack,R1; GOTO cmd. For one-nibble commands the third DOT is meaningless. Example program: program/demo_matrix/demo_matrix.mic (209 steps, all draw commands).</item>
+        <item key="throughput" status="simulated">In the emulator one draw command with the routine above costs 5 steps after REQ; between two commands the ESP needs at least 10 ms + REQ, and a REQ that the program misses costs a cycle of 90 ms (30 + 40 + 20 ms). demo_matrix: 129 draw commands of the glitter scene take about 28 s (about 0.2 s per pair of commands including the random computations).</item>
+      </protocol>
+      <item key="rows" status="user">One row consists of two registers: the even register R(2y) is the LEFT half (x = 0-3), the odd register R(2y+1) the RIGHT half (x = 4-7).</item>
+      <item key="bit_order" status="user">Within a register the bits 1-4 lie from left to right, so bit 4 (msb) is the right-most LED of that register (as in a coordinate system). SHL/SHR work the other way round, following the written binary number.</item>
+      <item key="numbering" status="user">Rows and columns of the matrix are numbered 1-8 (user): x = 1-8 from left to right, y = 1-8 from bottom to top.</item>
+      <item key="vertical" status="user">Confirmed: the lowest row is at the bottom; rows and columns are numbered starting at 1 (convention). x grows to the right, y upwards; row y = k+1 is the pair R(2k),R(2k+1), i.e. row 1 = R0,R1 at the bottom. Note: the 0-based row/field numbers inside the Whac-a-Mole programs (row 0 = bottom) are a program convention, the matrix itself is numbered 1-8.</item>
+      <item key="transfer_protocol" status="tested">Used by the Game of Life program, not a hardware standard: the matrix signals 'ready' with input bit 1 = 1; the program then sends DOT 1 (start), DOT R0 ... DOT RF (16 nibbles) and DOT 0 (end). The frame becomes visible after the end nibble. The 16 values follow each other directly, one DOT per command (one command time apart, 9.3 ms with the display off).</item>
+      <item key="frame_timing" status="user">The matrix expects the 16 register values at a spacing of about 9 ms. With another command time (display on: 13 ms and more, default address/command display 20.5 ms) the frame is not accepted. Consequently a frame can only be updated with the display switched off; after HALT or a breakpoint (display xx yyy) a continued program updates the matrix only after it has executed DISOUT again.</item>
+      <item key="readiness" status="user">Receive readiness of the matrix can be switched by the program. While the matrix is active it sends the ready signal (input bit 1 = 1) in a 1 ms cycle; while inactive it sends nothing and only waits for the switching signal. After power-on the matrix is active. The exact pulse shape does not matter for the programs: they switch the matrix inactive whenever it is not needed (user).</item>
+      <item key="toggle_signal" status="user">The switching signal is the value F on the outputs lasting 15 to 25 ms; it toggles active/inactive. Sequence: MOVI F,F - DOT F - MOVI 0,F - DOT F. The F lasts two command times, which falls into the window only with the display off (2 x 9.3 ms = 18.6 ms); with the default address/command display (20.5 ms per command) it lasts 41 ms and does not toggle, with one digit (2 x 13.0 ms = 26 ms) it is also too long.</item>
+      <item key="toggle_scope" status="assumed">Assumed: the F is only evaluated while the matrix waits for the start nibble; inside a frame F is ordinary data (two consecutive F data nibbles must not toggle).</item>
+    </led_matrix_8x8>
+    <keypad_4x4 status="user" description="16-key standard keypad on the 4 outputs and 4 inputs, planned for the games; implemented in the emulator (see emulator item keypad).">
+      <item key="scan_principle" status="user">Four keys (one row) are scanned at a time: a strobe signal on one of the outputs activates the row, the rows are scanned one after the other. KIN is replaced by DIN, so the input is non-blocking and the input routine gets longer because of the scan.</item>
+      <item key="matrix_conflict" status="user">While the matrix is active it holds input bit 1 at 1 (the emulator constantly), which would disturb the scan. The matrix is therefore switched inactive during the scan (see led_matrix_8x8 toggle_signal) and active only around a frame.</item>
+      <item key="program_assumption" status="assumed">The Whac-a-Mole programs assume: DOT s with s = 1, 2, 4, 8 activates row 0 (bottom) ... row 3 (top); DIN then returns the column bits 1-4 of the active row (bit 1 = left column, 1 = key pressed); several keys in one row: the highest column wins; key code = 4 * row + column (0 bottom left ... F top right). DIN = 0 means no key in this row (zero flag set by DIN).</item>
+      <item key="emulator_model" status="assumed">The emulator implements exactly the program assumption: row r (1-4 from the bottom) is activated by the one-hot strobe on output bit r (DOT 1, 2, 4, 8); a pressed key of the active row sets its column bit (key k: column k mod 4 + 1 = input bit) to 1 (active high). If several keys of a row are pressed, all their column bits are set; picking the highest column is up to the program. The real keypad hardware is not confirmed yet.</item>
+    </keypad_4x4>
+    <buttons_4 status="user" description="4 push buttons (Taster) on the inputs 1-4, used by the Invaders game.">
+      <item key="wiring" status="user">Button i sets input i to 1 while it is pressed. Real push buttons have no delay: the input follows the button directly, and DIN sees the state at the moment it executes.</item>
+      <item key="sampling" status="simulated">A program reads the buttons only when DIN executes. A short press that falls between two DIN commands is not seen at all; with one DIN per main-loop pass of about 0.6 s a tap of 0.15 s was missed in three of four cases in a Python model (Invaders sessions). Keep the button pressed until the program reacts.</item>
+    </buttons_4>
+  </peripherals>
+  <programming_idioms note="Collected from analysed programs. Idioms without a status attribute were verified in the emulator; status tested = verified in the emulator by the Whac-a-Mole program mole17; status user = supplied by the owner; status simulated = checked only in a Python model.">
+    <idiom key="memory_first" status="user">Owner's rule for all changes: use the program memory optimally, even if it means more work. Insert a command where it belongs and re-address all following commands and jump targets (and the address references in the documentation) instead of saving the re-addressing with detours (GOTO to free steps and back) that cost extra steps. Example: Blackjack 17 inserts MOVI 0,F at address 00 (+1 step) rather than a 3-step detour via FD-FF.</idiom>
+    <idiom key="no_xor_no_ori">There is no XOR and no ORI. XOR = (a OR b) AND NOT (a AND b); constants can be ORed only via a register.</idiom>
+    <idiom key="bit_count">Count bits of a register with SHL c / ADC a (msb first) or SHR c / ADC a (lsb first); CMPI 7,r / ADC a adds the msb of r without changing r.</idiom>
+    <idiom key="bit_extract">Isolate bits with ANDI masks: ANDI 5 keeps bits 1 and 3, ANDI A keeps bits 2 and 4, ANDI 7 clears bit 4, ANDI 1 keeps bit 1.</idiom>
+    <idiom key="rotate">Rotate a nibble left: SHL b; ADC b.</idiom>
+    <idiom key="row_rotate" status="simulated">Rotate a matrix row (two registers a = columns 1-4, b = columns 5-8) by one column with wrap-around: to the right (SHL direction) SHL b; MOVI 0,t; ADC t; SHL a; ADC b; ADD t,a (6 commands, t = scratch register). An exhaustive search (Invaders sessions) found no branch-free sequence of 5 or fewer commands in either direction. To the left it is more expensive because no command inserts a bit at bit 4 (ADC only inserts at bit 1); the best sequence found needs about 10 commands with two small fix-up blocks (ADDI 8 on carry).</idiom>
+    <idiom key="binary_dispatch" status="simulated">Choose between 4 cases (e.g. a row number 1-4) with one compare that answers two questions: CMPI 2,d sets carry for d = 3 or 4 and zero for d = 2. Code: CMPI 2,d; BRC HI; BRZ CASE2; CASE1 ... / HI: CMPI 3,d; BRZ CASE3; CASE4 ... Cost: 3 commands for cases 1 and 2, 4 for cases 3 and 4 (average 3.5), against 2, 4, 6, 6 for the linear chain CMPI 1 / CMPI 2 / CMPI 3 (average 4.5), and one program step less (5 instead of 6). With 8 cases the same scheme needs 3 levels (CMPI 4 first). Reorder the linear chain only when the cases are clearly unequally frequent. Used in the Invaders routine Toggle (version 31): 1 command less per call, behaviour identical tick by tick.</idiom>
+    <idiom key="pairs">Two registers form an 8-bit value; compare pairs with CMP high first, then low (BRZ on high equal, then low).</idiom>
+    <idiom key="loops">Countdown: SUBI 1,d; BRC loop (carry on underflow) or BRZ; modulo-4 tests: MOV d,c; ANDI 3,c; CMPI 3,c; BRZ.</idiom>
+    <idiom key="ring_rotation">Without indirect addressing, rows/records are processed by rotating a ring of registers through a fixed 'current' register (e.g. R0,R2,R4.. rotate with a scratch register).</idiom>
+    <idiom key="scratch_registers">Free scratch registers with MAS + EXRM + EXRM, or park values in M registers via EXRL/EXRM/EXRA. A value can also be parked in the latched outputs and read back through a cable (DOT/DIN).</idiom>
+    <idiom key="early_out">OR several registers into a scratch register and BRZ to skip work for an empty neighbourhood.</idiom>
+    <idiom key="dice">RND; CMPI 5,D; BRC repeat; ADDI 1,D.</idiom>
+    <idiom key="decimal">HXDZ/DZHX convert D,E,F between hex and decimal digits; MULT/DIV work on decimal digit registers.</idiom>
+    <idiom key="timing">With the display off a command takes 9.3 ms, so a loop of 100 commands takes about 0.93 s; with the default address/command display (20.5 ms per command) it takes 2.05 s. Plan runtimes accordingly, and note that timing sequences (see led_matrix_8x8 readiness) only work with the display off.</idiom>
+    <idiom key="memory_window" status="tested">Treat M0-MF as data (e.g. the whole LED matrix) and edit it through a window in R0-R7. Lower bank M0-M7: EXRL. Upper bank M8-MF: EXRA, EXRM, EXRA (EXRA moves the logic registers R8-RF into R0-R7, EXRM brings M8-MF into R8-RF, the second EXRA swaps again, so R0-R7 now hold M8-MF and R8-RF hold the logic registers again). Edit R0-R7 directly, then repeat the same sequence: every such sequence is its own inverse, writes the changed window back and restores all working registers. State kept in R8-RF (for EXRL) or anywhere in the working registers (for EXRA, EXRM, EXRA) survives; while the window is open the former contents of R0-R7 are hidden, so touch them only outside windows.</idiom>
+    <idiom key="matrix_frame_from_memory" status="user">Matrix kept in M0-MF: EXRL before the frame (R0-R7 = M0-M7); inside the frame code: wait for ready, DOT 1 (start), EXRM (R8-RF = M8-MF), DOT 0 ... DOT F without any command in between, EXRM back, DOT 0 (end); EXRL afterwards. The one command (EXRM) between the start nibble and the first data value is allowed because that gap is not checked. The frame scratch register (the example uses C, i.e. a register of R8-RF) serves the ready wait and the start/end nibble before the first and after the second EXRM; between the two EXRM it carries matrix data like all of R8-RF, and the logic registers of R8-RF are parked in M8-MF meanwhile.</idiom>
+    <idiom key="matrix_tiles_2x2" status="tested">Picture elements larger than one LED: a 2x2 field in a 4x4 grid (k = 4 * row + column, row 0 at the bottom, k = 0 bottom left ... F top right) uses the registers a = 4 * row + (column div 2) and a + 2 (two adjacent matrix rows). The left half-register of a row holds the field as value 3 (bits 1-2, the two left LEDs), the right half as value C (bits 3-4). Example: field 0 = M0 = 3, M2 = 3.</idiom>
+    <idiom key="add_set_clear" status="tested">Set and clear disjoint bit groups with one shared routine by adding: ADD mask to set (only if the field is clear) and ADD the complement modulo 16 to clear (only if the field is set): +3 / +D for mask 3, +C / +4 for mask C. No carry problems arise because different fields never share bits. The routine is the same for both; only the two constants in the mask registers differ. Never set a field twice or clear an empty field, the sums would corrupt neighbouring bits, so test first (CMP with the stored fields, see record_slots).</idiom>
+    <idiom key="entry_prologue" status="tested">Without indirect addressing and parameter passing, give a shared routine several entry points that load constants into registers and then GOTO or fall into the common code (PSET: MOVI 3,E; MOVI C,F; GOTO PLACE; PCLR: MOVI D,E; MOVI 4,F; falls into PLACE). The caller needs a single CALL; the mode lives in the code position instead of a register.</idiom>
+    <idiom key="tail_goto" status="tested">There is one return address. A routine that is CALLed and then CALLs another routine loses its own return address (see CALL). Use GOTO as the last step (tail jump): the other routine's RET returns directly to the original caller. Sequences that need to be shared by a routine and by the main flow are inlined or reached by GOTO; a sequence that needs a CALL inside is written as one flat routine (for example the frame output with the matrix toggles inline).</idiom>
+    <idiom key="backward_loop" status="tested">Put the loop end in front of the loop head so that the conditional branch jumps backwards into the loop end, which falls into the head: SCN: ADDI 4,D; ADD C,C; BRC EXIT / SC1: DOT C; DIN 8; BRZ SCN. This saves the GOTO of every iteration (the loop is entered once by GOTO SC1).</idiom>
+    <idiom key="din_zero_flag" status="tested">DIN sets the zero flag when the value read is 0, so BRZ directly after DIN tests 'no input' without CMPI 0,d. Keypad scan: DOT strobe; DIN d; BRZ next row (no key in this row).</idiom>
+    <idiom key="hex_counter" status="tested">Multi-digit hexadecimal counter: ADDI 1,lo; ADC mid; ADC hi (the carry of the ADDI ripples through the ADCs; the second ADC relies on the carry-out of ADC, confirmed on the real machine). Keep lo, mid, hi in R5, R6, R7: EXRA then moves them to D, E, F, exactly the HXDZ input order (F most significant), so the result is shown decimally with EXRA; HXDZ; DISP 3,D (valid up to 3E7 = 999, larger numbers show 000). The carry-out of ADC is confirmed and implemented in the emulator; the middle digit overflow (needs 256 hits) has not been exercised in a game run yet. The middle digit alone is count div 16, which is handy for difficulty stages.</idiom>
+    <idiom key="register_lifetimes" status="tested">Use a register twice when the lifetimes do not overlap: load scratch registers immediately before use and never keep them across RND (it overwrites D, E, F), across a window sequence of a different routine, or across code that uses the same register. Write down every register's role per routine. The Whac-a-Mole program fits 11 persistent and 5 scratch registers into the 16 working registers (persistent registers survive the window sequences, see memory_window).</idiom>
+    <idiom key="software_tick" status="tested">Without a usable clock, derive a tick from main-loop passes: ADDI 1,T; CMPI n,T; BRC tick (n + 1 passes per tick; reset T in the tick handler). The real period varies with the work done in a pass (a frame takes much longer than a scan), so it is a game speed, not a time base.</idiom>
+    <idiom key="random_chance" status="tested">Event with probability thr/16: RND; CMP D,thr; BRC event (carry = 1 if D &lt; thr, D = 0..F is the dice). Other digits from the same RND (E, F) can choose a target in the same call.</idiom>
+    <idiom key="record_slots" status="tested">Several independent objects (for example 3 moles with field and life) in fixed register pairs; without indexing write each step once per slot or rotate the ring (ring_rotation). A life value of 0 marks a free slot while the stale field value may stay; always test the state before trusting the key: CMP Ki,D; BRZ check; CMPI 0,Li; BRC active. Countdown and expiry: CMPI 0,Li; BRZ skip; SUBI 1,Li; BRZ expire (SUBI sets zero when the value reaches 0).</idiom>
+    <idiom key="matrix_toggle" status="tested">Inline sequence MOVI F,F; DOT F; MOVI 0,F; DOT F (display must be off) toggles the matrix; after power-on it is active (real machine; for the emulator see emulator item matrix_startup). A program that scans a keypad on the same lines switches the matrix inactive right at the start (while active it holds input 1 at 1 and interprets the outputs), activates it only directly before each frame and switches it off again right after the frame. A routine that contains the whole frame also contains the toggles inline (see tail_goto: no nested CALL).</idiom>
+    <idiom key="scan_cost" status="simulated">Keypad scan of 4 rows: unrolled one block per row costs 4 commands per row without a key (17 for the whole scan, 10-25 with a key) but 14 more program steps; the loop version (backward_loop) costs 28 commands without a key (10-32 with a key). Use the unrolled version when the keyboard reaction time is critical and steps are available.</idiom>
+    <idiom key="hold_tolerant_input" status="tested">Make a held key harmless by design instead of storing 'key already handled': a key on an empty field has no effect and a hit removes the target, so the repeated reads of the same key do nothing (except hitting a new target that appears on that field). The main loop returns after every scan, so holding a key never blocks other work.</idiom>
+    <idiom key="rnd_counter_mixing" status="simulated">Several independent random values between two key presses (Blackjack card draws): keep an accumulator X in a memory register and mix all three counter digits into it, then wait a random number of commands before the next RND: RND; EXRL; ADD D,7; ADD E,7; ADD F,7; MOV 7,D; EXRL; W: ADDI F,E; BRC W (X = M7 survives CLEAR and all rounds; the wait loop runs E + 1 times, so the counter advances by a random amount until the next draw). In a model with a counter RND (+1, +2 or +3 per command) every following card came out with 5.5-9.5 percent per value (ideal 7.7) and the third card after two known cards took 12.8-12.9 of 13 values; with RND D alone 0-60 percent and about 4 of 13. Mixing alone (without the wait) still left only about 3 possible next values. The measured value is +3 per command (see machine_overview rnd_counter); the emulator (version 16, mode Zaehler) now reproduces it.</idiom>
+    <idiom key="rnd_after_arithmetic" status="user">Derived from the counter measurements: right after HXDZ, DZHX, MULT or DIV the counter has a fixed value (FFF, 999, digit index of M, 100 or 000; HXDZ with overflow: input - 3E8), and after EXRA its two upper digits are 7 0. A RND that follows such a command within the same key-press interval is therefore fully predictable. Draw random values before these commands, or put a KIN in between. Conversely, RND directly after MULT returns the index of the highest non-zero digit of M0-M5 plus 3 in D (a free digit-length function).</idiom>
+    <idiom key="clock_edge_wait" status="user">Wait for the rising edge of the 1 Hz clock on input 4 (inputs 1-3 must be 0, e.g. matrix inactive): H: DIN s; CMPI 0,s; BRC H (wait while high) / L: DIN s; BRZ L (wait while low, 2 commands per pass because DIN sets the zero flag) / RND. 6 steps including RND; at most about 1 s. With the display off one pass of the low loop takes about 18 ms, so the counter after the edge takes about 54 different values depending on the clock phase. Any edge (rising or falling, every 0.5 s) also works: read the level first and add 8 to the mixing accumulator when it was high (10 steps); the falling-edge loop needs 3 commands per pass. Tested on the machine as a subroutine FLANKE (DIN 0; CMPI 0,0; BRC; DIN 0; BRZ; RND; RET).</idiom>
+    <idiom key="rnd_two_sources" status="user">Several random values at a program start without a key press: keep the two independent sources apart. A = RND directly at the start (time from RESET to RUN, after RESET about 200 values, without RESET after more than 20 s idle up to 4096); then wait for one clock edge (clock_edge_wait) and take B = RND. B - A depends only on the clock phase (about 54 values), not on the start time. Code: RND; MOV D,a; MOV E,b; CALL FLANKE; SUB a,D gives three values a, b and D = (B - A) mod 16; a and D are independent, b covers not quite all 16 values after a quick start. Together about 13 bits after RESET, enough for three dice or barely three hex digits. Waiting for further edges adds no randomness (the commands between edges varied by only one command for 1 s and for 4 s alike), so everything drawn later without a key press follows from these bits.</idiom>
+    <idiom key="stable_display" status="user">A live DISP shows every intermediate register state; short flashes of half-computed pictures disturb (owner: about 0.05 s is not noticed, 0.2 s is disturbing). Switch the display on only for finished pictures: DISP n,s directly before KIN and DISOUT directly after it, DISP at the start and DISOUT at the end of a pause routine, and compute everything else dark. The dark phases also run faster (9.3 instead of 25.5 ms per command with DISP 6). In the Blackjack model no visible state shorter than 0.5 s remained (before: over 30000).</idiom>
+    <idiom key="pause_two_level" status="simulated">Adjustable pause with LED countdown: DISP 6,0; MOVI F,E; MOVI k,F; DL: DOT E; ADDI F,E; BRC DL; ADDI F,F; BRC DL; DISOUT; RET. The inner loop runs 16 times (ADDI F,E carries until E was 0 and leaves E = F again), the outer counter F gives (k + 1) x 16 passes: about 1.3 s per 16 passes with DISP 6 (k = 1: 2.7 s). The constant k at one address tunes all pauses without changing the program length; the LEDs count down F..0 each round.</idiom>
+    <idiom key="decimal_add_one_sub" status="simulated">Add a value v (1-10) to a two-digit decimal number t u with one subtraction: keep c = 10 - v (computed from the card: c = 0 for a ten, else MOVI A,c; SUB v,c); SUB c,u; BRC under; ADDI 1,t; ... / under: ADDI A,u. A borrow means u + v stayed below 10 (add the 10 back), otherwise u is already u + v - 10 and the tens grow by 1.</idiom>
+    <idiom key="threshold_fold" status="simulated">Test a two-digit decimal value against a threshold with the carry instead of two branches: value t u greater than 21: MOV t,x; CMPI 1,u; ADC x; CMPI 2,x; BRC over (x = t + 1 if u is at least 2; over if x is at least 3). The same pattern (CMPI 6,u; ADC x; CMPI 1,x) tests 'at least 17'. 5 steps instead of 6 with a branch tree.</idiom>
+    <idiom key="key_bound_dispatch" status="simulated">Key menu with LED hint: keep in C the highest key that is allowed now and show it with DOT C. KIN D; BRZ key0; CMP C,D; BRC ignore (key greater than C); CMPI 1,D; BRZ key1; CMPI 2,D; BRZ key2; the last case follows without a branch. One compare filters every forbidden key. Pitfall: an arithmetic dispatch such as SUB C,D; CMPI k,D lets some other key produce the same difference (Blackjack v13: key B would have split while only double was allowed).</idiom>
+    <idiom key="carry_selected_entry" status="simulated">One routine with two behaviours selected by the carry flag on entry: NEW: MOVI 0,a; MOVI 0,b; ...; BRC ADDC (carry 1: use the value already in D, carry 0: fall into HIT and draw). MOV and MOVI keep the carry, so the initialisation can sit before the branch. Callers often get the carry for free from the preceding command (C21 ends with carry 0, SUBI F,A / ADDI F,A leave carry 1); STC only where nothing else provides it.</idiom>
+    <idiom key="fifo_slot_ring" status="simulated">Queue of up to 3 records of 2 nibbles in M0-M5 without indexing: ROT: EXRL; MOV 5,F; MOV 4,E; MOV 3,5; MOV 2,4; MOV 1,3; MOV 0,2; MOV D,1; MOV C,0; EXRL; RET takes the oldest record out at the top (into F E) and pushes D C in at the bottom. A record with high nibble 0 is an empty slot (stored records set bit 8 in the high nibble). Store: ROT with the record in D C; read in storing order: ROT with D = 0 and skip empty slots (CMPI 0,F; BRZ again); reading thereby empties the ring.</idiom>
+    <idiom key="bank_account" status="simulated">Keep a 3-digit hex account in M8-MF (D E F) and switch to it with EXRM: BET: EXRM; MOVI 2,8; BETC: SUB 8,D; SUBC E; SUBC F; BRC PAY (not enough: book it back, carry stays 1 for the caller); EXRM; RET / PAY: ADD 8,D; ADC E; ADC F; EXRM; RET. Both return in the game context. For display HXDZ and DISP 3,D in the bank context, DZHX before calculating again.</idiom>
+    <idiom key="display_wrap" status="simulated">DISP wraps from F to 0, so one picture can combine the end of the high and the start of the low registers: DISP 6,C shows R1 R0 RF RE RD RC. Blackjack v12 uses it for the result picture (dealer sum stays in R1 R0, the player hand comes from the queue into F E, D = 0 as separator, C = gain) and saves the copying (2 steps).</idiom>
+    <idiom key="self_branch_end" status="simulated">End a program without HALT (HALT replaces the display by address and command): a branch to itself whose flag is known to be set, e.g. CMPI E,5; ENDE: BRZ ENDE right after the key test - the same step is the exit test and the endless loop, and the live DISP stays visible.</idiom>
+  </programming_idioms>
+  <known_programs note="Listing files were created in earlier work sessions and may not be available in a new chat.">
+    <program name="Mensch aergere dich nicht (Ludo), 2 players" steps="247 (00-F6)" file="mensch_aergere_dich_nicht.txt">
+      <description>Human against computer. Four pieces per player as 8-bit positions in register pairs (R0/R1..R6/R7), kept sorted; opponent in M0-M7 (EXRL switches player). Positions: 0 = house, 1 = start field, 1-40 ring, 41-44 home; opponent coordinate = (position + 20) mod 40. Output 4 wired to input 4 holds the player flag (0 = computer, 8 = human), restored by DIN C because C is used as scratch. Human chooses a piece with keys 1-4. Computer: capture first, then clear the start field, then move the most advanced piece. A rolled 6 gives another turn.</description>
+      <requires>cable output 4 -&gt; input 4; registers 0 at start (not checked yet whether the program relies on RF = 0; RF is F after power-on/reset, see power_on_state)</requires>
+    </program>
+    <program name="Game of Life, 8x8 torus" steps="255 (00-FE), version 3" file="game_of_life_v3.txt">
+      <description>Conway's Game of Life on a torus. Row k = R(2k) (cells 0-3) + R(2k+1) (cells 4-7), logical msb-first; physical matrix mirrored and shifted by 4 columns (x = (3 - c) mod 8). 16 iterations per generation process one row half each with a ring of 6 row registers; new values go to a queue in M0/M2/M4/M6; rows 5/6 are parked in MA-MD during the calculation because RA-RD are scratch (RA count, RB cell nibble, RC temp, RD iteration counter). Early-out skips empty neighbourhoods.</description>
+      <start>Key 0-6: preset patterns (0,1 oscillators period 2; 2 beacon-like; 3 glider; 4,5 spaceship; 6 R-pentomino), key 7: random, keys 8-F: enter 16 hex digits (rows 0-3 first, then rows 4-7).</start>
+      <output>Per generation: wait until input bit 1 = 1, then DOT 1, R0..RF, DOT 0.</output>
+      <performance>About 913 commands per generation for an empty field up to about 3440 for a dense field, i.e. roughly 8 s to 31 s at 9 ms per command; a glider needs 32 generations (about 12 minutes) for one lap.</performance>
+    </program>
+    <program name="Whac-a-Mole (Maulwurf), 4x4 fields on the 8x8 matrix" steps="mole07: 174; mole15: 167; mole16: 179; mole17: 252 (00-FB)" file="mole01.mic ... mole17.mic (a version number per file)">
+      <description>Fields 0 (bottom left) to F (top right) are 2x2 LED blocks (see matrix_tiles_2x2). The matrix is kept in M0-MF, edited through a window (memory_window) and fields are set and cleared by addition (add_set_clear). Keys come from a scanned 4x4 keypad (keypad_4x4; DIN instead of KIN). Versions: mole07 = waves of up to 3 moles (N RND runs, N = 1 + hits/16, max 3; the same field twice gives fewer moles); the next wave starts when all moles are hit; a key on an empty field is a miss; three misses end the game and show the hits decimal (hex counter in R5-R7, EXRA; HXDZ; DISP 3,D); the earlier baseline. mole15 = empty field has no consequence, a held key no longer blocks (END not yet reachable). mole16 = adds the matrix toggle so that keypad rows are scanned while the matrix is inactive. mole17 (current baseline, runs in the emulator) = independent moles with a life of F..0: the life shrinks with the hits (F - 2 * S, S = min(hits div 16, 5)), software tick every 3 scans, chance of a further mole (2 * S + 2)/16 per tick (always one if none is active), a mole that runs out counts as a miss, three misses end the game; 252 of 256 steps, registers 11 persistent + 5 scratch (see register_lifetimes). mole08-mole14 (ready signal F, toggles around the scan, other frame variants) were reported by the user as not working in the emulator and are superseded.</description>
+      <requires>matrix; keypad as in peripherals/keypad_4x4 (from mole07 on); DISOUT executed first (the matrix toggle only works with the display off); all registers 0 at start (not checked yet whether mole17 relies on RF = 0; RF is F after power-on/reset, see power_on_state); matrix active at program start: the first toggle of mole17 switches it inactive. Since the emulator starts with the matrix inactive (see emulator item matrix), switch it on with key m before RUN.</requires>
+      <status status="user">mole17 is the user's current baseline and was verified in the emulator (it runs). mole15 and mole16 are intermediate steps.</status>
+      <tuning>mole17: tick period = CMPI n,A at address 09 (n + 1 scans), start life = MOVI F,E at 50 and the ADD C,C at 4F (factor 2 per stage), stage cap = CMPI 5,C at 7B and MOVI 5,C at 7E (at most 7, otherwise the life reaches 0), stage speed = MOV 6,C at 78 (hits div 16), chance = ADD C,C at 41 and ADDI 2,C at 42 (2 * S + 2 of 16, at most F). Addresses refer to the listing mole17.mic.</tuning>
+    </program>
+    <program name="Blackjack" steps="253 (00-FC), version 13" file="blackjack-13.mic, blackjack-13.xml, blackjack-13.ods (project)">
+      <description>Blackjack without matrix: 6-digit display, KIN and the 4 LEDs. Infinite deck (cards 1-D), bet 2 chips, start 20 chips, dealer plays after the player card by card with pauses, double, split (up to 3 hands), insurance, blackjack 3:2. Play picture E D K K S S, dealer F 0 K K S S, result D D S S 0 G. Keys 0 rest, 1 card, 2 double, 3 split, 4 insurance, E end; the LEDs show the highest allowed key. Display only on for stable pictures. Uses rnd_counter_mixing, stable_display, pause_two_level, decimal_add_one_sub, threshold_fold, key_bound_dispatch, carry_selected_entry, fifo_slot_ring, bank_account, display_wrap, self_branch_end.</description>
+      <requires>start after power-on or reset (no CLEAR at the program start; M0-M5 must be 0). RF is F after power-on/reset (see power_on_state); up to version 16 the start account D E F therefore read F14, version 17 clears RF in INIT (MOVI 0,F inserted at address 00, all following addresses moved by 1).</requires>
+      <status status="simulated">Checked only in a Python model against an independent Blackjack reference; not yet run in the emulator or on the machine.</status>
+      <tuning>Pause length: MOVI k,F at address EA (11F = about 2.7 s, 10F = 1.3 s, 12F = 4 s). Start account: MOVI 4,D / MOVI 1,E at 00/01 (014h = 20 chips).</tuning>
+    </program>
+  </known_programs>
+  <open_questions note="To be checked on the real machine or decided; the emulator uses the assumption in brackets.">
+    <question key="keypad_emulation">Does the real 4x4 keypad work as modelled in the emulator (one-hot strobe on outputs, active-high column bits on inputs 1-4, several keys in a row set several bits)? (implemented as modelled; the programs assume the same)</question>
+    <question key="pgm_details">Details of PGM 3-6 that were not specified: does PGM 3/4 start directly on selection or only after RUN, what happens with invalid times in PGM 3, does PGM 5/6 reset the address and registers, does PGM 4 change registers or outputs afterwards? (see fixed_programs, details marked assumed)</question>
+    <question key="pgm7_nim">Contents of PGM 7 (Nim game) - the owner will supply the program. (table entry empty)</question>
+    <question key="rnd_counter_open">RND counter cases not measured yet: MULT overflow and MULT/DIV/DZHX with digits A-F (emulator: overflow as a correct MULT, non-decimal operands leave the counter, DZHX always 999); EXRA when the lowest nibble wraps during the EXRA itself (emulator: 70 first, then +3); the remaining commands between two RND (emulator: +3); does the HALT command itself count +3 (irrelevant for programs; emulator: yes).</question>
+  </open_questions>
+  <answered_questions note="Former open questions, answered by the owner of the real machine in revision 6 and later and incorporated above.">
+    <answer key="ret_twice" status="user">RET does not clear the return address; repeated RETs jump to the last known return address, only a CALL overwrites it. The return register initially holds the call address 00, so RET without a real CALL jumps to address 01 (not 00).</answer>
+    <answer key="mult_div_hex" status="user">MULT and DIV with a non-decimal operand leave working and memory registers unchanged and only set the carry flag. DIV with divisor 0 sets all 6 working registers to E and the carry flag.</answer>
+    <answer key="halt_display" status="user">After HALT: two address digits, a blank, three command digits (as assumed).</answer>
+    <answer key="matrix_vertical" status="user">The lowest row is at the bottom; rows and columns are numbered from 1 (convention).</answer>
+    <answer key="fixed_programs" status="user">See fixed_programs: 0 hardware test, 1/2 cassette (all three omitted), 3 set time, 4 show time, 5 clear to 000, 6 fill with F01, 7 Nim game (to be supplied).</answer>
+    <answer key="adc_subc_carry" status="user">ADC/SUBC: the register itself can trigger a carry again on overflow (ADC) and underflow (SUBC), as assumed.</answer>
+    <answer key="matrix_startup_state" status="user">Decided and implemented in the emulator: the matrix starts inactive when the emulator starts, key m toggles it by hand (like the program's switching signal), and a reset (z) keeps the active/inactive state and the picture. Programs that expect an active matrix at start (mole17, Invaders) need m before RUN.</answer>
+    <answer key="rnd_clock_entropy" status="user">Does waiting for further 1 Hz clock edges give new randomness? No: the number of commands between two rising edges took the same 2-3 neighbouring values for 1 s (335/338/341 counter steps) and for 4 s (1343/1346/1349) in 16 runs each, so the RC clock does not drift noticeably within seconds and only the first edge after a start adds randomness (rnd-zaehler-protokoll.md, series 5).</answer>
+    <answer key="rnd_display_speed" status="user">Does the display mode change the speed of the RND counter? No: +3 per command with the default display, DISOUT, DISP 1 and DISP 6 (measured 2026-11-06, rnd-zaehler-protokoll.md). The full counter model is in machine_overview item rnd_counter.</answer>
+  </answered_questions>
+  <emulator file="microtronic-20.py" language="Python 3, no start arguments, 80x22 text screen, German user interface">
+    <item key="purpose">Interactive Microtronic emulator with monitor, panel and settings always active. Three windows: left = display, PC/code, outputs, inputs with the RND mode to their right, registers R and M, flags, step counter, breakpoint; middle = PERIPHERIE (input sources, 4 buttons, 4x4 keypad); right = program window or 8x8 LED matrix (key v).</item>
+    <item key="device_keys">0-9 a-f hex, h HALT, n NEXT (also Enter, and space outside RUN), r RUN, s STEP, g REG, k BKP, p PGM, x C/CE (also Backspace). Esc aborts an entry. The arrow keys operate the 4 buttons (default left, up, down, right = button 1-4, see key t). During RUN the hex keys press the 4x4 keypad (not the command entry); while KIN waits they deliver the key value.</item>
+    <item key="emulator_keys">l load (.mic and .txt), w save (default extension .mic), i debug mode on/off, o input sources (see sources), m switch the LED matrix active/inactive, t button assignment (then 1-4 cycles the arrow key of button 1-4: none, left, up, down, right; t or any other key ends), + / - speed factor, v switch program / matrix view, u RND mode Zaehler / Zufall, space during RUN pause / continue, z reset, ? help, q quit. There is no menu.</item>
+    <item key="pause">Version 19: the space bar pauses a running program and continues it (outside RUN it is NEXT as before; Enter is always NEXT). During the pause nothing advances: no command is executed, the simulated time, the signal sources on it and the RND counter stand still, so the program afterwards behaves exactly as without the pause (the real machine has no pause). The header shows Modus PAUSE. HALT ends the run also during the pause; emulator keys (speed, view, matrix, u, o, t, ...) keep working; keypad and buttons are not evaluated. While KIN waits the program is already stopped and the space bar has no effect. After the pause the speed control does not catch up the paused time.</item>
+    <item key="rnd_model" status="tested">Version 16, display changed in version 17. Constants CTR_STEP = 3 and CTR_RATE = 205. The CPU keeps the 12-bit counter ctr. step() adds CTR_STEP after every command; HXDZ, DZHX, MULT, DIV and EXRA first set it as measured (see these commands), then the +3 follows. RND reads ctr at the start of the command in mode Zaehler (rnd_counter = True, default) and three random hex digits in mode Zufall. Outside RUN (monitor, HALT state, single steps between the steps, PGM 3/4) and while KIN waits the counter runs in real time at CTR_RATE steps per second, independent of the speed factor; during RUN it counts only per command (simulated, so the speed factor does not change the values). Reset (z) sets it to 000. Key u switches the mode (also during RUN and KIN); the mode survives a reset. The left window shows the mode in two lines at the right edge of the output and input rows (one column before the separator): 'RND' above the active mode, 'mic' (Zaehler as on the machine) or 'emu' (Zufall). The counter value is not shown (version 16 showed it under the input row; removed in version 17 because a snapshot at redraw time carries no useful information). All 73 measured runs of rnd-zaehler-protokoll.md (without the timed idle/KIN runs) are reproduced exactly; idle rate and KIN wait were checked with a timed test (1 s = 205 steps, 0.5 s KIN = +102).</item>
+    <item key="timing_model">The CPU keeps a simulated time (unit 0.1 ms, integer). Each command adds 9.3 ms (display off), 9.3 + 3.7 + 2.5 x (n-1) ms for n digits after a DISP n, or 20.5 ms with the default address/command display (before any DISP, after reset or an interrupt). The duration depends on the display state before the command. Peripherals receive the time at the start of the command in dot(value, time) and din_bits(time). Single steps (s) advance the simulated time in the same way as RUN. The RND counter does not use this time (see rnd_model).</item>
+    <item key="speed_factor">+ / - select a speed factor applied to the original command time: max, 20x, 10x, 5x, 2x, 1x (original, default at start), 0.5x, 0.25x, 0.1x, 0.05x, 0.01x. Real time per command = original duration (including the display-dependent part) / factor. The factor only changes the playback speed; the simulated time and the matrix timing (toggle) are independent of it. Since version 16 a reset (z) keeps the selected factor (before: back to 1x).</item>
+    <item key="debug_mode">Key i toggles debug mode (header shows DEBUG). Off (default, as on the real machine): HALT, a breakpoint and the end of a run interrupt the display state, i.e. the display returns to the default 5-digit address/command display. On: the display state (DISP/DISOUT) and with it the timing is preserved across HALT, breakpoints, STEP and RUN, so timing-critical sequences can be debugged. Reset (z) clears the state in both modes and switches debug mode off.</item>
+    <item key="reset">Key z: registers R and M, flags, PC 00, return address, outputs, display state, step counter, simulated time and RND counter (000) are reset, a running program stops, a matrix frame in progress is dropped, the matrix frame counter is set to 0, the keypad is released and the source / button-assignment modes end; debug mode goes off. Kept: program, speed factor, RND mode, input sources, button assignment, matrix state (active/inactive) and picture, clock.</item>
+    <item key="display_in_run">During RUN the display shows the live DISP registers; before any DISP it shows the executed address, a blank and the command; after DISOUT it is blank.</item>
+    <item key="sources">Key o opens the source mode: every input has exactly one source. Up/down selects the input, left/right cycles the source: - (none), Low, High (constant), Ausgang (cable from an output; digits 1-4 choose the output), Square (50 percent duty cycle), Noise (random level per period), Zufall (a random number lo-hi on all four inputs at once, new per period; two hex digits set the range). +/- changes the frequency of Square, Noise and Zufall (0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50 Hz; default 1 Hz). x removes the source of the selected input, x twice removes all. The time base is the simulated CPU time while a program runs and real time otherwise, so the signals are visible without a program. Input value at DIN: cables and sources set the bits of their inputs (Zufall sets all four), then the peripherals (matrix ready bit, buttons, keypad) are ORed on top.</item>
+    <item key="matrix">The LED matrix is always attached (class LedMatrix, since version 21 with the ESP2090 Studio protocol, see peripherals led_matrix_8x8 protocol esp2090). It starts switched off. Key m cycles: off -> ESP (ESP2090 Studio, REQ/ACK, block mode ACK 1 and all draw commands) -> alt (earlier block protocol: ready constantly on input 1, start nibble 1, 16 values in the 9.3 ms rhythm, end nibble 0, F signal of 15-25 ms toggles on/off) -> off. ESP mode is modelled on the simulated CPU time (0.1 ms units, independent of the emulator speed): REQ cycles of 30 ms (+40 ms guard for a late ACK, +20 ms pause), ACK detection after the outputs were 0, 0.7 ms control read, nibbles sampled from the output latch at the firmware times (constants ESP_*), 10 ms pause after each transfer; the CPU calls tick(time) of every peripheral after each command so that scheduled reads complete before a KIN or HALT. The drawing logic is a port of firmware/matrix_draw.py (planes, drawing types, Bresenham line, shift, stack of 8, palette, display on/off); the view shows only what the firmware would have redrawn. A reset (z) keeps mode, picture, colors and stacks, drops a transfer in progress and sets the counters to 0. v switches the view between program window and matrix. Matrix view: header MATRIX ESP|alt an|aus (+ dunkel after ACK 15 off); LED = * in its palette color (24-bit ANSI colors, without color support plain *), dark = blank, columns separated by dots (row 1 without dots), top border _ , bottom border macron (U+00AF, constant BOTTOM_CHAR); status line B n (frames) Z n (draw commands) A n (last ACK) and (k/n) during a transfer. In ESP mode input 1 shows the REQ pulses (EINGANG field).</item>
+    <item key="fixed_programs">HALT PGM n: 0-2 report that they are omitted; 3 = set time (mode PGM 3, display hhmmss, hhmm entry from the right, HALT starts the clock); 4 = clock display on 6 digits, outputs = seconds ones digit binary, HALT ends; 5 / 6 fill the program memory with 000 / F01 and set the address to 00; 7 loads from the table FIXED_PROGRAMS, which is empty until the Nim program is supplied. See fixed_programs.</item>
+    <item key="clock">Class Clock: the system time plus an offset set by PGM 3; TIME loads it into A-F. The clock is part of the CPU object and survives a reset (z).</item>
+    <item key="command_entry">Typed hex digits shift into a separate 3-digit command buffer from the right (only the last three count); the address content is not read into it. NEXT stores the buffer (missing left digits = 0) and advances; C/CE removes the last typed digit, a second press all typed digits; HALT BKP 00 clears the breakpoint.</item>
+    <item key="keypad">Class Keypad: 4x4 keypad (hex keys during RUN; key k: row k div 4 + 1 from the bottom, column k mod 4 + 1) on the strobe protocol of peripherals/keypad_4x4: a pressed key sets input bit (column) to 1 while its row bit is set in the last DOT value. The 4 buttons set input bit 1-4 directly, independent of the strobe; each button follows the arrow key assigned with t (none = not connected; the assignment survives a reset). Buttons and keypad count only during RUN and not while the source mode (o) or the assignment mode (t) is open. The middle window shows pressed keys as [#] and the active keypad row.</item>
+    <item key="key_state" status="tested">Version 15: how a pressed key is detected depends on the system. Windows (os.name nt): class LiveKeys reads the real key state with GetAsyncKeyState (user32) at every DIN and every redraw: a button or keypad key counts exactly as long as the computer key is held, like the real push buttons; this also works while the terminal window is in the background (accepted by the owner). Hex keys: digits 0-9 (main keyboard and numeric keypad) and letters A-F. The middle window then shows 'Taster live'. Other systems (Linux, macOS, Termux): a terminal reports no key release, so a key counts as pressed for 0.7 s after the first press and for 0.15 s after each key repeat (KEY_HOLD_FIRST, KEY_HOLD_REPEAT). The environment variable MICROTRONIC_KEYS=terminal forces this estimate on Windows, too. Tested with a simulated key state (not on a Windows machine).</item>
+    <item key="settings">Everything is set by keys inside the program: l/w files, z reset, +/- speed factor, i debug mode, o input sources, m matrix, t button assignment, u RND mode, v view. No start arguments; only the optional environment variable MICROTRONIC_KEYS.</item>
+    <item key="verification">The CPU core was checked with a reference implementation of Game of Life and with the Ludo and Life programs; the RND counter with the owner's 73 measured runs (see rnd_model); real-hardware behaviour is only known where marked 'user'.</item>
+    <item key="api">Classes Microtronic (cpu, time, clock, step_duration(), RND counter ctr, rnd_counter, ctr_now(), ctr_sync(), idle(on), hooks on_display/on_dot/key_source, peripherals with dot(value, time) and din_bits(time), sources: wires, signals, rnd, set_source(), read_inputs()), Signal (Low, High, Square, Noise, Zufall), Clock (now(), set(hour, minute)), LedMatrix (active, toggle(), reset_protocol()), Keypad(live=None) (press_key(k), press_button(i), pressed_keys(), pressed_buttons(), attributes arrows and gate), LiveKeys (Windows only) and live_keys(), load_program(path, warnings) and disasm(code) can be imported for tests. A Microtronic object created on its own (without Emulator) has the idle counter off, so tests count only per command.</item>
+  </emulator>
+  <manual_notes>
+    <note type="source_scope">This XML organizes the commands documented in the provided four-page manual extract. It does not enumerate all 4096 possible 3-hex-digit values individually; it records the documented command patterns and fixed special codes.</note>
+    <note type="source_typo">The manual contains apparent typographical inconsistencies in some flag descriptions (for example CMP/CMPI zero-flag parenthetical expressions). They have been normalized only where the intended condition is unambiguous from the surrounding description; verify against the original manual if exact transcription is required.</note>
+    <note type="flag_semantics">Flag conditions are transcribed from the manual extract; terminology follows the source.</note>
+    <note type="revision">Revision 2 added: normalised zero-flag wording (original kept in attribute manual_text), syntax/operation per command, clarifications with status, corrected one-address code range, corrected CALL nesting statement, machine overview, keyboard operation, flag conventions, program file format, peripherals, idioms, known programs, open questions and emulator notes.</note>
+    <note type="revision">Revision 3 added: display-dependent command timing (9.3 ms display off, +3.7 ms first digit, +2.5 ms each further digit; 20.5 ms with the default address/command display before DISP), HALT/breakpoint interrupting the display state, LED matrix readiness with toggle signal (F for 15-25 ms), emulator simulated time, speed factor, debug mode, matrix view layout, removal of input switches, frame timing check (values must arrive at about 9 ms spacing).</note>
+    <note type="revision">Revision 4 added: status simulated, programming idioms from the Whac-a-Mole sessions (memory window, frame from memory, 2x2 tiles, set/clear by addition, entry prologue, tail GOTO, backward loop, DIN zero flag, hex counter with EXRA/HXDZ, register lifetimes, software tick, random chance, record slots, matrix toggle usage, scan cost, hold-tolerant input), the keypad peripheral (assumed protocol), the Whac-a-Mole program entry with tuning addresses, open questions keypad_emulation and ready_pulse_width, and a note on ADC carry-out; the root revision attribute was corrected to 4.</note>
+    <note type="revision">Revision 5 changed: mole17 is the verified baseline (user: runs in the emulator), so the idioms it uses changed from status simulated to tested (scan_cost stays simulated); the real matrix pulse shape is no longer relevant (open question ready_pulse_width removed); added the open question matrix_startup_state and the emulator item matrix_startup (planned key m, start state undecided); the hex counter idiom notes the not yet exercised ADC carry-out.</note>
+    <note type="revision">Revision 6 (version 01, emulator microtronic-01.py) changed: owner's answers incorporated (RET keeps the return address and without CALL jumps to 01; MULT/DIV with non-decimal operands leave all registers unchanged and only set the carry, DIV by 0 sets R0-R5 to E; HALT display confirmed; matrix lowest row at the bottom, numbering from 1; ADC/SUBC carry confirmed); new section fixed_programs (PGM 0-7, PGM 3-6 implemented in the emulator, 0-2 omitted, 7 pending); the emulator now has the 4x4 keypad, 4 buttons, the clock (class Clock) and a three-window screen; open questions reduced and answered_questions added; file names changed to microtronic-01.xml / microtronic-01.py (numbered from now on).</note>
+    <note type="revision">Revision 7 (version 15, emulator microtronic-15.py) changed: the emulator section follows the code of microtronic-15.py (input sources with key o replace the cable entry, key m toggles the matrix, which starts inactive, key t assigns arrow keys to the buttons, speed factors 0.05x and 0.01x added, middle window PERIPHERIE); new emulator item key_state: on Windows the buttons and the keypad follow the real key state (GetAsyncKeyState), elsewhere the 0.7 s / 0.15 s estimate stays; open question matrix_startup_state answered and removed from the open questions; new peripheral entry buttons_4 (real push buttons, sampling by DIN); new idiom row_rotate (results of the exhaustive search from the Invaders sessions); mole17 requires note adapted to the inactive matrix start. Versions 02-14 of the emulator were not documented in this file; this revision describes version 15 as found in the code.</note>
+    <note type="revision">Revision 8 (version 15) added: idiom binary_dispatch (one CMPI with carry and zero splits 4 cases, from the Invaders sessions).</note>
+    <note type="revision">Revision 9 (version 15) added from the Blackjack sessions: RND is a counter on the real machine (owner's measurement, clarification at RND); idioms rnd_counter_mixing, stable_display (owner's flicker threshold), pause_two_level, decimal_add_one_sub, threshold_fold, key_bound_dispatch, carry_selected_entry, fifo_slot_ring, bank_account, display_wrap, self_branch_end; known program Blackjack.</note>
+    <note type="revision">Revision 10 (version 16, emulator microtronic-16.py) added the owner's RND counter measurements of 2026-11-06 (protocol claude/rnd-zaehler-protokoll.md in the project): machine_overview item rnd_counter (12 bit, +3 per command independent of the display, about 205 steps/s in idle and during KIN, RESET = 000), counter effects at HXDZ, DZHX, MULT, DIV and EXRA, notes at KIN and DISP, the HXDZ input order confirmed (status user), idiom rnd_after_arithmetic, rnd_counter_mixing updated, open question rnd_counter_open and answer rnd_display_speed. Emulator: RND mode Zaehler (default, measured model) / Zufall with key u, new items rnd_model and reset, reset keeps the speed factor.</note>
+    <note type="revision">Revision 11 (version 17, emulator microtronic-17.py): RND mode display moved to the right edge of the output/input rows as RND / mic or emu, counter value line removed; no change to the CPU or the counter model.</note>
+    <note type="revision">Revision 12 (version 18, emulator microtronic-18.py): reset (z) sets the matrix frame counter to 0; the picture and the active/inactive state are still kept.</note>
+    <note type="revision">Revision 13 (version 19, emulator microtronic-19.py): space bar = pause / continue during RUN (new emulator item pause), help page reorganised (it now fits the 12 dialog lines; in versions 16-18 the last help line was cut off).</note>
+    <note type="revision">Revision 14 (version 19, emulator unchanged): 1 Hz clock measurements of 2026-11-06 added: machine_overview items clock_1hz and execution_speed_measured (112.4 commands/s, about 8.9 ms), idioms clock_edge_wait and rnd_two_sources, rnd_counter consequence extended, answer rnd_clock_entropy.</note>
+    <note type="revision">Revision 16 (version 21, emulator microtronic-21.py): ESP2090 Studio matrix protocol added (peripherals led_matrix_8x8 protocol esp2090: REQ/ACK handshake, block mode ACK 1, draw commands ACK 3-15, two planes, drawing types, stack, palette, display on/off) from the ESP2090 repository (docs/LED-Matrix.md, firmware main.py and matrix_draw.py). Emulator: LedMatrix rewritten with modes ESP and alt (earlier protocol kept for the existing programs), key m cycles off/ESP/alt, colored matrix view, peripheral tick after each command. Tested with demo_matrix.mic (all 14 scenes, every draw command received), a block-mode frame and the earlier protocol.</note>
+    <note type="revision">Revision 15 (version 20, emulator microtronic-20.py): power-on/reset state corrected: RF = F, all other registers 0 (owner); emulator start and reset z set RF = F. Checked the current programs: Blackjack 16 relied on RF = 0 (start account F14) and was fixed in Blackjack 17; Star Trek 01, Tetris 05, Snake 02, Springer 05 and Invaders 35 do not depend on it (RF is written before it is read, or the program clears all registers). Ludo, Game of Life and Whac-a-Mole were not checked (listings not in the project).</note>
+    <note type="correction">Revision 6: RET without a preceding CALL jumps to address 01, not 00 (the return register starts with the call address 00).</note>
+    <note type="correction">The extract's warning that a CALL inside a subprogram causes an endless loop was corrected by the user: there is one return address and a nested CALL overwrites it.</note>
+    <note type="correction">The extract's zero-flag wording 'd=1..F / d=0' means the value in register d, not the register number; for DOT the 'd' is a typo for s (confirmed by the user).</note>
+  </manual_notes>
+</microtronic_instruction_set>
