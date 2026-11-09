@@ -598,7 +598,7 @@ ESP_IDLE = 200          # IDLE_SLEEP_MS 20 ms ohne ACK, dann neues REQ
 ESP_AFTER_ACK = 135     # WAIT_AFTER_ACK / WAIT_AFTER_1 13,5 ms nach dem Kontroll-Lesen
 ESP_NIBBLE = 92.17      # NIBBLE_INTERVAL 9,217 ms
 ESP_AFTER_CMD = 100     # nach jeder Uebertragung 10 ms, dann neues REQ
-ESP_NIBBLES = (0, 16, 0, 1, 2, 0, 2, 2, 2, 0, 2, 1, 0, 1, 1, 1)   # Nibbles je ACK
+ESP_NIBBLES = (0, 16, 0, 1, 2, 0, 2, 2, 2, 0, 2, 1, 0, 1, 1, 0)   # Nibbles je ACK (15 = schlafen)
 ESP_STACK = 8           # Plaetze je Stapel (ACK 13)
 # Palette der Firmware (PALETTE_DEFAULT, Helligkeit 0-10) und Namen
 PALETTE = ((0, 0, 0), (10, 0, 0), (10, 4, 0), (10, 10, 0), (0, 8, 0), (0, 8, 6), (0, 0, 10),
@@ -619,7 +619,9 @@ class LedMatrix:
     0,7 ms danach liest er es nochmal und nimmt REQ zurueck. Ohne ACK geht REQ nach 30 ms low,
     bis 70 ms nach REQ gilt ein spaetes ACK noch, sonst 20 ms Pause und neues REQ.
     ACK 1 (Blockmodus): ein Befehl Abstand, dann 16 Nibbles (Register 0-F) in die Bitmatrix.
-    ACK 2-15 (Zeichenmodus): die 1 oder 2 Nibbles folgen direkt in den naechsten Schritten.
+    ACK 2-14 (Zeichenmodus): die 1 oder 2 Nibbles folgen direkt in den naechsten Schritten.
+    ACK 15 (Schlafmodus): kein REQ mehr, Eingang 1 und Ausgaenge sind frei; ein Wechsel auf F
+    an den Ausgaengen weckt (0,7 ms spaeter REQ wie gewohnt, ACK erst nach einer 0).
     Gelesen wird zeitgesteuert: erstes Nibble 13,5 ms (+9,217 ms bei ACK 1) nach dem
     Kontroll-Lesen, dann alle 9,217 ms - es gilt der Wert, der dann auf den Ausgaengen liegt.
     Nach der Uebertragung 10 ms Pause, dann neues REQ.
@@ -645,7 +647,6 @@ class LedMatrix:
         self.colors = [1] * 64     # alles rot
         self.c1x = self.c1y = self.c2x = self.c2y = 0
         self.paint = 1
-        self.shown_on = True       # ACK 15: Anzeige an/aus
         self.stack_bits, self.stack_colors = [], []
         self.redraw(notify=False)
 
@@ -655,13 +656,14 @@ class LedMatrix:
         self.reset_protocol()
 
     def reset_protocol(self):
-        """CPU-Reset: angefangene Uebertragung verwerfen, Zaehler auf 0; Bild, Farben und
-        aktiv/inaktiv bleiben (der ESP laeuft weiter)."""
+        """CPU-Reset: angefangene Uebertragung verwerfen, Zaehler auf 0; Bild, Farben,
+        aktiv/inaktiv und der Schlafmodus bleiben (der ESP laeuft weiter)."""
+        asleep = getattr(self, "phase", None) == "asleep"
         self.frames = 0            # empfangene Bilder (ACK 1 bzw. altes Protokoll)
         self.cmds = 0              # empfangene Zeichenbefehle (ACK 2-15)
         self.last_ack = None
         self.out = 0               # Ausgaenge des 2090 (nach Reset 0)
-        self.phase = "sleep"       # sleep, wait, read
+        self.phase = "asleep" if asleep else "sleep"   # sleep, wait, read, asleep (ACK 15)
         self.wake = 0              # sleep: Zeitpunkt des naechsten REQ (None = sofort)
         self.req_t = 0
         self.req_low = 0
@@ -687,7 +689,7 @@ class LedMatrix:
 
     def redraw(self, notify=True):
         """Anzeige neu aufbauen: Pixel an -> Farbnummer, sonst None."""
-        self.shown = [self.colors[i] if self.shown_on and self.bits[i] else None for i in range(64)]
+        self.shown = [self.colors[i] if self.bits[i] else None for i in range(64)]
         if notify and self.on_frame:
             self.on_frame(self)
 
@@ -809,13 +811,7 @@ class LedMatrix:
         if ack == 14:
             self.paint = data[0] & 15
             return False
-        if ack == 15:
-            w = data[0]
-            if w not in (1, 2, 3):
-                return False
-            self.shown_on = (not self.shown_on) if w == 1 else (w == 2)
-            return True
-        return False                          # ACK 2, 5, 9, 12: ohne Bedeutung
+        return False                          # ACK 2, 5, 9, 12: ohne Bedeutung, 15: Schlafen
 
     # ---- Handshake auf der simulierten Zeit ----
     def _start_req(self, t):
@@ -827,6 +823,8 @@ class LedMatrix:
         if not self.active or self.proto != "esp":
             return
         while True:
+            if self.phase == "asleep":                                # ACK 15: nur dot() weckt
+                return
             if self.phase == "sleep":
                 if self.wake is None:
                     self.wake = t
@@ -876,8 +874,14 @@ class LedMatrix:
             self._dot_alt(v, t)
             return
         self.advance(t)
-        self.out = v
-        if not self.active or self.phase != "wait":
+        prev, self.out = self.out, v
+        if not self.active:
+            return
+        if self.phase == "asleep":                    # Wecken: Wechsel auf F
+            if v == 0xF and prev != 0xF:
+                self.phase, self.wake = "sleep", t + ESP_DETECT
+            return
+        if self.phase != "wait":
             return
         if not self.seen_zero:
             self.seen_zero = v == 0
@@ -887,7 +891,11 @@ class LedMatrix:
             self.ack, self.data = v, []
             n = ESP_NIBBLES[v]
             first = ack_t + ESP_AFTER_ACK + (ESP_NIBBLE if v == 1 else 0)
-            if n:
+            if v == 15:                               # schlafen: kein REQ, bis F weckt
+                self.cmds += 1
+                self.last_ack = v
+                self.phase = "asleep"
+            elif n:
                 self.phase = "read"
                 self.reads = [first + k * ESP_NIBBLE for k in range(n)]
             else:
@@ -1477,9 +1485,8 @@ class Emulator:
             rows = [f"{y + 1} |" + sep(y).join(dot(m.pixel(x, y)) for x in range(8)) + "|"
                     for y in range(7, -1, -1)]
             bottom = "   " + BOTTOM_CHAR * 15              # untere Begrenzung
-            title = "MATRIX " + ("ESP" if m.proto == "esp" else "alt") + (" an" if m.active else " aus")
-            if m.proto == "esp" and not m.shown_on:
-                title += " dunkel"                        # ACK 15: Anzeige aus
+            title = "MATRIX " + ("ESP" if m.proto == "esp" else "alt") + (
+                " aus" if not m.active else " schlaeft" if m.phase == "asleep" and m.proto == "esp" else " an")
             body = [title, top] + rows + [bottom, "   " + " ".join(str(x + 1) for x in range(8)),
                                               status]
             pad = " " * (W_RIGHT - MATRIX_WIDTH - MATRIX_MARGIN)   # Block ganz rechts im Feld
