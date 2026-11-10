@@ -598,6 +598,8 @@ ESP_IDLE = 200          # IDLE_SLEEP_MS 20 ms ohne ACK, dann neues REQ
 ESP_AFTER_ACK = 135     # WAIT_AFTER_ACK / WAIT_AFTER_1 13,5 ms nach dem Kontroll-Lesen
 ESP_NIBBLE = 92.17      # NIBBLE_INTERVAL 9,217 ms
 ESP_AFTER_CMD = 100     # nach jeder Uebertragung 10 ms, dann neues REQ
+ESP_WAKE_REQ = 2000     # erstes REQ nach dem Wecken: bis 200 ms auf das ACK warten
+ESP_HOLD = 400          # steht das F eines ACK 15 nach 40 ms noch, ist es ein Wecksignal
 ESP_NIBBLES = (0, 16, 0, 1, 2, 0, 2, 2, 2, 0, 2, 1, 0, 1, 1, 0)   # Nibbles je ACK (15 = schlafen)
 ESP_STACK = 8           # Plaetze je Stapel (ACK 13)
 # Palette der Firmware (PALETTE_DEFAULT, Helligkeit 0-10) und Namen
@@ -668,6 +670,10 @@ class LedMatrix:
         self.req_t = 0
         self.req_low = 0
         self.seen_zero = False
+        self.saw_f = False         # F liegt an (gehaltenes Wecksignal): Wegnehmen zaehlt wie eine 0
+        self.long_req = False      # naechstes REQ nach dem Wecken: bis ESP_WAKE_REQ
+        self.req_len = ESP_REQ
+        self.hold_t = None         # ACK 15: steht das F dann noch, ist es ein Wecksignal
         self.ack = 0
         self.reads = []            # read: ausstehende Lesezeitpunkte
         self.data = []
@@ -815,15 +821,22 @@ class LedMatrix:
 
     # ---- Handshake auf der simulierten Zeit ----
     def _start_req(self, t):
-        self.phase, self.req_t, self.req_low = "wait", t, t + ESP_REQ
+        self.req_len = ESP_WAKE_REQ if self.long_req else ESP_REQ
+        self.long_req = False
+        self.phase, self.req_t, self.req_low = "wait", t, t + self.req_len
         self.seen_zero = self.out == 0
+        self.saw_f = self.out == 15
 
     def advance(self, t):
         """ESP bis zum Zeitpunkt t laufen lassen (Ereignisse vor t, Ausgaenge = self.out)."""
         if not self.active or self.proto != "esp":
             return
         while True:
-            if self.phase == "asleep":                                # ACK 15: nur dot() weckt
+            if self.phase == "asleep":                                # ACK 15: nur dot() weckt ...
+                if self.hold_t is not None and t > self.hold_t:       # ... oder das F steht > 40 ms
+                    self.phase, self.wake, self.long_req = "sleep", self.hold_t, True
+                    self.hold_t = None
+                    continue
                 return
             if self.phase == "sleep":
                 if self.wake is None:
@@ -832,7 +845,7 @@ class LedMatrix:
                     return
                 self._start_req(self.wake)
             elif self.phase == "wait":
-                end = self.req_t + ESP_REQ + ESP_GUARD
+                end = self.req_t + self.req_len + ESP_GUARD
                 if end >= t:
                     return
                 self.phase, self.wake = "sleep", end + ESP_IDLE      # kein ACK
@@ -878,14 +891,18 @@ class LedMatrix:
         if not self.active:
             return
         if self.phase == "asleep":                    # Wecken: Wechsel auf F
-            if v == 0xF and prev != 0xF:
-                self.phase, self.wake = "sleep", t + ESP_DETECT
+            if v != 0xF:
+                self.hold_t = None                    # das F des ACK 15 wurde weggenommen
+            elif prev != 0xF:
+                self.phase, self.wake, self.long_req = "sleep", t + ESP_DETECT, True
             return
         if self.phase != "wait":
             return
-        if not self.seen_zero:
-            self.seen_zero = v == 0
-        elif v:                                       # ACK erkannt
+        if not self.seen_zero and v == 0:
+            self.seen_zero = True
+        elif not self.seen_zero and v == 0xF:
+            self.saw_f = True                         # der 2090 haelt F, bis er REQ sieht
+        elif v and (self.seen_zero or self.saw_f):    # ACK erkannt (nach 0 oder nach gehaltenem F)
             ack_t = t + ESP_DETECT
             self.req_low = min(self.req_low, ack_t)
             self.ack, self.data = v, []
@@ -895,6 +912,7 @@ class LedMatrix:
                 self.cmds += 1
                 self.last_ack = v
                 self.phase = "asleep"
+                self.hold_t = ack_t + ESP_HOLD
             elif n:
                 self.phase = "read"
                 self.reads = [first + k * ESP_NIBBLE for k in range(n)]
