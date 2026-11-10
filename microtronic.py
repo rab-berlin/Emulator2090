@@ -674,6 +674,7 @@ class LedMatrix:
         self.long_req = False      # naechstes REQ nach dem Wecken: bis ESP_WAKE_REQ
         self.req_len = ESP_REQ
         self.hold_t = None         # ACK 15: steht das F dann noch, ist es ein Wecksignal
+        self.auto_sleep = False    # ACK kam direkt aus dem gehaltenen F: nach dem Befehl schlafen
         self.ack = 0
         self.reads = []            # read: ausstehende Lesezeitpunkte
         self.data = []
@@ -868,7 +869,10 @@ class LedMatrix:
         self.last_ack = ack
         if self.command(ack, self.data):
             self.redraw()
-        self.phase, self.wake = "sleep", last + ESP_AFTER_CMD
+        if self.auto_sleep:                           # ein Befehl je Wecken: wieder schlafen
+            self.phase, self.hold_t = "asleep", None
+        else:
+            self.phase, self.wake = "sleep", last + ESP_AFTER_CMD
 
     def tick(self, t):
         self.advance(t)
@@ -905,6 +909,7 @@ class LedMatrix:
         elif v and (self.seen_zero or self.saw_f):    # ACK erkannt (nach 0 oder nach gehaltenem F)
             ack_t = t + ESP_DETECT
             self.req_low = min(self.req_low, ack_t)
+            self.auto_sleep = not self.seen_zero      # direkt aus dem gehaltenen F
             self.ack, self.data = v, []
             n = ESP_NIBBLES[v]
             first = ack_t + ESP_AFTER_ACK + (ESP_NIBBLE if v == 1 else 0)
@@ -919,7 +924,10 @@ class LedMatrix:
             else:
                 self.cmds += 1
                 self.last_ack = v
-                self.phase, self.wake = "sleep", ack_t + ESP_AFTER_CMD
+                if self.auto_sleep:
+                    self.phase, self.hold_t = "asleep", None
+                else:
+                    self.phase, self.wake = "sleep", ack_t + ESP_AFTER_CMD
 
     # ---- altes Protokoll (Startnibble 1, 16 Werte, Endnibble 0, F-Umschaltsignal) ----
     def _dot_alt(self, v, t):
