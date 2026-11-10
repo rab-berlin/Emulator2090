@@ -34,10 +34,6 @@ T_CMD = 93            # Befehl bei abgeschaltetem Display: 9,3 ms
 T_DISP_FIRST = 37     # erste angezeigte Stelle: +3,7 ms
 T_DISP_MORE = 25      # jede weitere Stelle: +2,5 ms
 T_DEFAULT_DISP = 205  # Standardanzeige ohne DISP (Adresse, Befehl): 20,5 ms
-NIBBLE_MIN = 80       # Abstand aufeinanderfolgender Datenwerte: 9,3 ms (Display aus) +-
-NIBBLE_MAX = 110      # Toleranz; bei laengerer Befehlsdauer wird das Bild verworfen
-TOGGLE_MIN = 150      # F auf den Eingaengen: 15 ms ...
-TOGGLE_MAX = 250      # ... bis 25 ms schaltet die Matrix um
 
 # RND-Zaehler (am echten Geraet gemessen, siehe rnd-zaehler-protokoll.md):
 # 12 Bit, +3 je ausgefuehrtem Befehl (unabhaengig von der Anzeige), im Leerlauf, im HALT-Zustand
@@ -627,20 +623,15 @@ class LedMatrix:
     Gelesen wird zeitgesteuert: erstes Nibble 13,5 ms (+9,217 ms bei ACK 1) nach dem
     Kontroll-Lesen, dann alle 9,217 ms - es gilt der Wert, der dann auf den Ausgaengen liegt.
     Nach der Uebertragung 10 ms Pause, dann neues REQ.
-
     Die Anzeige wird nur neu aufgebaut, wenn der Befehl das verlangt (wie die Firmware):
     Farbe waehlen (ACK 14), Zeichenart 0 und Stapel (ACK 13) aendern nur den Speicher;
     sichtbar wird das mit dem naechsten Neuaufbau.
 
-    Protokoll 'alt' (Blockmodus der fruehen Programme, z.B. Game of Life): Ready dauerhaft
-    auf Eingang 1, Startnibble 1, 16 Nibbles im 9,3-ms-Takt, Endnibble 0 uebernimmt das Bild;
-    ein F von 15-25 ms schaltet die Matrix um.
     """
 
     def __init__(self):
         self.on_frame = None
         self.active = False        # LED on/off der Weboberflaeche (Taste m), anfangs aus
-        self.proto = "esp"         # esp = ESP2090-Studio, alt = altes Blockprotokoll
         self.reset()
 
     # ---- Speicher (matrix_draw.Matrix) ----
@@ -661,7 +652,7 @@ class LedMatrix:
         """CPU-Reset: angefangene Uebertragung verwerfen, Zaehler auf 0; Bild, Farben,
         aktiv/inaktiv und der Schlafmodus bleiben (der ESP laeuft weiter)."""
         asleep = getattr(self, "phase", None) == "asleep"
-        self.frames = 0            # empfangene Bilder (ACK 1 bzw. altes Protokoll)
+        self.frames = 0            # empfangene Bilder (ACK 1)
         self.cmds = 0              # empfangene Zeichenbefehle (ACK 2-15)
         self.last_ack = None
         self.out = 0               # Ausgaenge des 2090 (nach Reset 0)
@@ -678,21 +669,11 @@ class LedMatrix:
         self.ack = 0
         self.reads = []            # read: ausstehende Lesezeitpunkte
         self.data = []
-        # altes Protokoll
-        self.state, self.buf = "idle", []
-        self.f_since = None
-        self.last_t = 0
 
     def toggle(self):
-        """LED on/off (Taste m bzw. altes Umschaltsignal)."""
+        """LED on/off (Taste m)."""
         self.active = not self.active
         self.phase, self.wake, self.reads = "sleep", None, []
-        self.state, self.buf, self.f_since = "idle", [], None
-
-    def set_proto(self, proto):
-        self.proto = proto
-        self.phase, self.wake, self.reads = "sleep", None, []
-        self.state, self.buf, self.f_since = "idle", [], None
 
     def redraw(self, notify=True):
         """Anzeige neu aufbauen: Pixel an -> Farbnummer, sonst None."""
@@ -830,7 +811,7 @@ class LedMatrix:
 
     def advance(self, t):
         """ESP bis zum Zeitpunkt t laufen lassen (Ereignisse vor t, Ausgaenge = self.out)."""
-        if not self.active or self.proto != "esp":
+        if not self.active:
             return
         while True:
             if self.phase == "asleep":                                # ACK 15: nur dot() weckt ...
@@ -880,16 +861,11 @@ class LedMatrix:
     def din_bits(self, t=0):
         if not self.active:
             return 0
-        if self.proto == "alt":
-            return 1                                  # Ready dauerhaft 1
         self.advance(t)
         return 1 if self.phase == "wait" and self.req_t <= t < self.req_low else 0
 
     def dot(self, v, t=0):
         v &= 0xF
-        if self.proto == "alt":
-            self._dot_alt(v, t)
-            return
         self.advance(t)
         prev, self.out = self.out, v
         if not self.active:
@@ -929,40 +905,8 @@ class LedMatrix:
                 else:
                     self.phase, self.wake = "sleep", ack_t + ESP_AFTER_CMD
 
-    # ---- altes Protokoll (Startnibble 1, 16 Werte, Endnibble 0, F-Umschaltsignal) ----
-    def _dot_alt(self, v, t):
-        if self.f_since is not None and v != 0xF:        # F-Pegel endet
-            dur = t - self.f_since
-            self.f_since = None
-            if TOGGLE_MIN <= dur <= TOGGLE_MAX:
-                self.toggle()
-                return
-        if self.state == "data" and self.buf and not NIBBLE_MIN <= t - self.last_t <= NIBBLE_MAX:
-            self.state, self.buf = "idle", []         # Werte nicht im 9-ms-Takt: Bild verworfen
-        self.last_t = t
-        if self.state == "idle":
-            if v == 0xF:
-                if self.f_since is None:
-                    self.f_since = t
-            elif self.active and v == 1:
-                self.state, self.buf = "data", []
-        elif self.state == "data":
-            self.buf.append(v)
-            if len(self.buf) == 16:
-                self.state = "end"
-        else:                                   # Endenibble
-            if v == 0:
-                self.frame(self.buf)
-                self.frames += 1
-                self.redraw()
-            self.state = "data" if v == 1 else "idle"
-            if v == 1:
-                self.buf = []
-
     def receiving(self):
         """Fortschritt einer laufenden Uebertragung als Text (oder '')."""
-        if self.proto == "alt":
-            return f"({len(self.buf)}/16)" if self.active and self.state == "data" else ""
         if self.phase == "read":
             n = len(self.data) + len(self.reads)
             return f"({len(self.data)}/{n})"
@@ -1502,7 +1446,7 @@ class Emulator:
         if self.view == "matrix":
             m = self.matrix
             status = f"B{m.frames} Z{m.cmds}"             # Bilder (Blockmodus) und Zeichenbefehle
-            if m.proto == "esp" and m.last_ack is not None:
+            if m.last_ack is not None:
                 status += f" A{m.last_ack}"               # letztes ACK
             status = f"{status} {m.receiving()}".rstrip()
             top = "   " + "_" * 15                       # obere Begrenzung
@@ -1511,8 +1455,8 @@ class Emulator:
             rows = [f"{y + 1} |" + sep(y).join(dot(m.pixel(x, y)) for x in range(8)) + "|"
                     for y in range(7, -1, -1)]
             bottom = "   " + BOTTOM_CHAR * 15              # untere Begrenzung
-            title = "MATRIX " + ("ESP" if m.proto == "esp" else "alt") + (
-                " aus" if not m.active else " schlaeft" if m.phase == "asleep" and m.proto == "esp" else " an")
+            title = "MATRIX ESP" + (
+                " aus" if not m.active else " schlaeft" if m.phase == "asleep" else " an")
             body = [title, top] + rows + [bottom, "   " + " ".join(str(x + 1) for x in range(8)),
                                               status]
             pad = " " * (W_RIGHT - MATRIX_WIDTH - MATRIX_MARGIN)   # Block ganz rechts im Feld
@@ -1624,7 +1568,7 @@ class Emulator:
             " Lauf:     Leertaste = Pause / weiter   0-9 a-f Keypad   Pfeile = Taster",
             " Emulator: l Laden  w Sichern  z Reset (Tempo bleibt)  v Ansicht  t 1-4 Taster",
             "           u RND: mic = Zaehler wie das Geraet, emu = Zufall      q Ende",
-            "           m Matrix: aus -> ESP2090 (REQ/ACK, Zeichenbefehle) -> alt -> aus",
+            "           m Matrix: aus <-> an (ESP2090-Studio: REQ/ACK, Zeichenbefehle)",
             "           i Debug: HALT/Haltepunkt behalten Display-Zustand und Timing",
             "           o Quellen: ^v Eingang, <> Quelle, +/- Takt, x loescht (2x = alle)",
             " Anzeige:  DISP bleibt live bis DISP/DISOUT/HALT; HALT zeigt Adresse + Befehl",
@@ -1797,18 +1741,10 @@ class Emulator:
             self.msg = ""
             return True
         if k == "MATRIX":
-            m = self.matrix                               # Zyklus: aus -> ESP2090 -> alt -> aus
-            if not m.active:
-                m.set_proto("esp")
-                m.toggle()
-            elif m.proto == "esp":
-                m.set_proto("alt")
-            else:
-                m.toggle()
-            self.msg = ("Matrix aus" if not m.active else
-                        "Matrix an: ESP2090-Studio (REQ/ACK, Blockmodus ACK 1 und Zeichenbefehle)"
-                        if m.proto == "esp" else
-                        "Matrix an: altes Protokoll (Startnibble 1, 16 Werte, Endnibble 0)")
+            m = self.matrix                               # Taste m: aus <-> an (ESP2090-Studio)
+            m.toggle()
+            self.msg = ("Matrix an: ESP2090-Studio (REQ/ACK, Blockmodus ACK 1 und Zeichenbefehle)"
+                        if m.active else "Matrix aus")
             return True
         if k == "DEBUG":
             self.debug = not self.debug

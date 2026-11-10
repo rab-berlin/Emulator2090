@@ -17,7 +17,6 @@ Benötigt ein Terminal mit mindestens 80 x 22 Zeichen. Läuft unter Linux, macOS
 - **Peripherie:** Eingangsquellen (Kabel, Rechteck, Rauschen, Zufallszahl), 4 Taster, ein 4x4-Keypad.
 - **LED-Matrix 8x8:**
   - **ESP:** Protokoll des [ESP2090 Studios](https://github.com/rab-berlin/ESP2090) mit Anfrage/Antwort, Blockmodus, allen Zeichenbefehlen und Schlafen/Wecken (ACK 15, gehaltenes F, ein Befehl je Wecken), farbig dargestellt.
-  - **alt:** das frühere Blockprotokoll.
 - **Pause:** Leertaste während des Laufs.
 - **Tempo:** einstellbar; Reset behält das Tempo.
 - **Debug-Modus:** Haltepunkte, Einzelschritt.
@@ -29,7 +28,7 @@ Benötigt ein Terminal mit mindestens 80 x 22 Zeichen. Läuft unter Linux, macOS
 | `0`-`9` `a`-`f` | Hex-Eingabe |
 | `h` `n` `r` `s` `g` `k` `p` `x` | HALT, NEXT, RUN, STEP, REG, BKP, PGM, C/CE |
 | `l` / `w` | Programm laden / sichern (.mic) |
-| `m` | Matrix: aus → ESP → alt → aus |
+| `m` | Matrix ein / aus |
 | `v` | rechtes Feld: Programm oder Matrix |
 | `o` / `t` | Eingangsquellen / Pfeiltasten den Tastern zuordnen |
 | `u` | RND: Zähler wie das Gerät (mic) oder Zufall (emu) |
