@@ -16,7 +16,7 @@ Benötigt ein Terminal mit mindestens 80 x 22 Zeichen. Läuft unter Linux, macOS
 - **Festprogramme:** PGM 3/4 (Uhr), PGM 5/6.
 - **Peripherie:** Eingangsquellen (Kabel, Rechteck, Rauschen, Zufallszahl), 4 Taster, ein 4x4-Keypad.
 - **LED-Matrix 8x8:**
-  - **ESP:** Protokoll des [ESP2090 Studios](https://github.com/rab-berlin/ESP2090) mit Anfrage/Antwort, Blockmodus, allen Zeichenbefehlen und dem Schlafmodus (ACK 15, Wecken mit F), farbig dargestellt.
+  - **ESP:** Protokoll des [ESP2090 Studios](https://github.com/rab-berlin/ESP2090) mit Anfrage/Antwort, Blockmodus, allen Zeichenbefehlen und Schlafen/Wecken (ACK 15, gehaltenes F, ein Befehl je Wecken), farbig dargestellt.
   - **alt:** das frühere Blockprotokoll.
 - **Pause:** Leertaste während des Laufs.
 - **Tempo:** einstellbar; Reset behält das Tempo.
