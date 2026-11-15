@@ -7,8 +7,10 @@ Monitor, Panel und alle Einstellungen sind immer aktiv:
   Geraetetasten  0-9 a-f, h HALT, n NEXT, r RUN, s STEP, g REG, k BKP, p PGM, x C/CE
   Emulator       l Laden, w Sichern, i Debug, o Quellen, m Matrix, t Tasterbelegung, +/- Tempo, v Ansicht,
                  u RND-Modus (Zaehler / Zufall), z Reset, ? Hilfe, q Ende
+                 y Userscript laden, j Userscript Start / Stop, G / H (Shift) Web-Tasten
                  Leertaste: NEXT, im Programmlauf Pause / weiter
 """
+import builtins
 import datetime
 import os
 import random
@@ -17,6 +19,7 @@ import select
 import shutil
 import sys
 import time
+import types
 from collections import deque
 
 try:
@@ -602,6 +605,8 @@ ESP_STACK = 8           # Plaetze je Stapel (ACK 13)
 PALETTE = ((0, 0, 0), (10, 0, 0), (10, 4, 0), (10, 10, 0), (0, 8, 0), (0, 8, 6), (0, 0, 10),
            (6, 0, 10), (10, 0, 6), (10, 10, 10), (3, 0, 0), (0, 3, 0), (0, 0, 3), (3, 3, 0),
            (10, 3, 3), (3, 3, 3))
+COLOR_NAMES = {"schwarz": 0, "rot": 1, "orange": 2, "gelb": 3, "gruen": 4, "tuerkis": 5,
+               "blau": 6, "violett": 7, "magenta": 8, "weiss": 9}   # setColors (Firmware)
 PALETTE_NAMES = ("schwarz", "rot", "orange", "gelb", "gruen", "tuerkis", "blau", "violett",
                  "magenta", "weiss", "dunkelrot", "dunkelgruen", "dunkelblau", "oliv", "rosa", "grau")
 
@@ -632,6 +637,8 @@ class LedMatrix:
     def __init__(self):
         self.on_frame = None
         self.active = False        # LED on/off der Weboberflaeche (Taste m), anfangs aus
+        self.palette = list(PALETTE)   # setPalette (Userscript) aendert sie; LED aus und Reset nicht
+        self.raw = None            # Bild, das ein Userscript direkt mit np.write() geschrieben hat
         self.reset()
 
     # ---- Speicher (matrix_draw.Matrix) ----
@@ -678,11 +685,43 @@ class LedMatrix:
     def redraw(self, notify=True):
         """Anzeige neu aufbauen: Pixel an -> Farbnummer, sonst None."""
         self.shown = [self.colors[i] if self.bits[i] else None for i in range(64)]
+        self.raw = None                       # Neuaufbau ueberschreibt ein np-Bild (wie die Firmware)
         if notify and self.on_frame:
             self.on_frame(self)
 
     def pixel(self, x, y):
         return self.shown[y * 8 + x]
+
+    def pixel_rgb(self, x, y):
+        """Farbe der LED (r, g, b) in der Helligkeit der Firmware, None = aus."""
+        if self.raw is not None:                     # np-Bild: Verdrahtung np[x * 8 + y]
+            c = self.raw[x * 8 + y]
+            return None if c == (0, 0, 0) else c
+        n = self.shown[y * 8 + x]
+        return None if n is None else self.palette[n]
+
+    # ---- Userscripts (setColors, setPalette, np)
+    def set_colors(self, names):
+        """64 Farbnamen, oberste Zeile zuerst. Unbekannte Namen = 0 (schwarz)."""
+        if len(names) != 64:
+            return False
+        for y in range(8):
+            for x in range(8):
+                self.colors[y * 8 + x] = COLOR_NAMES.get(names[(7 - y) * 8 + x], 0)
+        self.redraw()
+        return True
+
+    def set_palette(self, index, rgb):
+        if 0 <= index < 16:
+            self.palette[index] = tuple(int(v) & 255 for v in rgb)
+            self.redraw()
+            return True
+        return False
+
+    def show_raw(self, pixels):
+        self.raw = list(pixels)
+        if self.on_frame:
+            self.on_frame(self)
 
     def _apply(self, i, art):
         if art == 0:
@@ -913,6 +952,464 @@ class LedMatrix:
         return ""
 
 
+# ================================================================ Userscripts (ESP2090)
+# Wie die Firmware (main.py): Das Script wird in "async def __user_task()" eingerueckt und
+# als Coroutine neben dem 2090 ausgefuehrt. Im Emulator laeuft sie auf der Zeit des ESP:
+# waehrend RUN auf der simulierten Zeit der CPU (Tempo und Pause wirken mit), sonst in Echtzeit.
+# Vor dem Start dieselbe Pruefung wie die Firmware (script_problem).
+FOR_RANGE_MAX = 64
+SCRIPT_LINE_OFFSET = 3       # Zeilen vor dem Script (Leerzeile, import, async def)
+SCRIPT_LOG_SIZE = 40         # LOG_SIZE der Firmware
+SCRIPT_RESUMES = 200         # hoechstens so viele Fortsetzungen je Takt (sonst springt die Zeit)
+WEB_KEY_TIME = 5000          # Web-Taste G/H gilt 0,5 s als gedrueckt (0,1 ms)
+BEEP_QUEUE_MAX = 32
+
+
+def _code_lines(code):
+    """Zeilen ohne Kommentare und ohne Inhalt von Zeichenketten (Zeilen bleiben gleich)."""
+    out, cur = [], []
+    i, n = 0, len(code)
+    quote = None
+    while i < n:
+        c = code[i]
+        if quote:
+            if c == "\\":
+                if code[i + 1:i + 2] == "\n":
+                    out.append("".join(cur))
+                    cur = []
+                i += 2
+                continue
+            if code.startswith(quote, i):
+                cur.append(quote)
+                i += len(quote)
+                quote = None
+                continue
+            if c == "\n":
+                out.append("".join(cur))
+                cur = []
+            i += 1
+            continue
+        if c == "#":
+            while i < n and code[i] != "\n":
+                i += 1
+            continue
+        if c in "'\"":
+            quote = c * 3 if code.startswith(c * 3, i) else c
+            cur.append(quote)
+            i += len(quote)
+            continue
+        if c == "\n":
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    out.append("".join(cur))
+    return out
+
+
+def _is_name_char(c):
+    return c.isalpha() or c.isdigit() or c == "_"
+
+
+def _find_word(s, w, start=0):
+    i = s.find(w, start)
+    while i >= 0:
+        before = s[i - 1] if i > 0 else " "
+        after = s[i + len(w)] if i + len(w) < len(s) else " "
+        if not _is_name_char(before) and not _is_name_char(after):
+            return i
+        i = s.find(w, i + 1)
+    return -1
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def _small_range(header):
+    i = header.find(" in ")
+    if i < 0:
+        return False
+    rest = header[i + 4:].strip()
+    if not rest.startswith("range(") or rest.find(")") < 0:
+        return False
+    args = rest[6:rest.find(")")]
+    try:
+        nums = [int(a) for a in args.split(",")]
+        if not 1 <= len(nums) <= 3:
+            return False
+        return len(range(*nums)) <= FOR_RANGE_MAX
+    except Exception:
+        return False
+
+
+def _header_colon(text):
+    depth = 0
+    for i, c in enumerate(text):
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == ":" and depth == 0:
+            return i
+    return -1
+
+
+def script_problem(code):
+    """Erstes Problem als Text ("line N: ..."), sonst None (Pruefung der Firmware)."""
+    lines = _code_lines(code)
+    for no, line in enumerate(lines):
+        text = line.strip()
+        if not text:
+            continue
+        for mod in ("time.", "utime."):
+            p = text.find(mod + "sleep")
+            if p >= 0 and (p == 0 or not _is_name_char(text[p - 1])):
+                return "line {}: time.sleep blocks everything - use await asyncio.sleep_ms(...)".format(no + 1)
+        if _find_word(text, "input") >= 0 and text[_find_word(text, "input") + 5:].lstrip().startswith("("):
+            return "line {}: input() is not available".format(no + 1)
+        kind = None
+        if text.startswith("while") and not _is_name_char(text[5:6] or " "):
+            kind = "while"
+        elif text.startswith("for") and not _is_name_char(text[3:4] or " "):
+            kind = "for"
+        if not kind:
+            continue
+        colon = _header_colon(text)
+        if colon < 0:
+            continue
+        header = text[:colon]
+        if kind == "for" and _small_range(header):
+            continue
+        body = [text[colon + 1:]]
+        ind = _indent(line)
+        for nxt in lines[no + 1:]:
+            if not nxt.strip():
+                continue
+            if _indent(nxt) <= ind:
+                break
+            body.append(nxt)
+        if not any(_find_word(b, "await") >= 0 for b in body):
+            what = "while loop" if kind == "while" else \
+                "for loop (more than {} passes or not a fixed range)".format(FOR_RANGE_MAX)
+            return "line {}: {} without await - add e.g. await asyncio.sleep_ms(20)".format(no + 1, what)
+    return None
+
+
+class ScriptCancelled(BaseException):
+    """Stop: wird wie asyncio.CancelledError am await in das Script geworfen."""
+
+
+class _Sleep:
+    def __init__(self, ms):
+        self.ms = ms
+
+    def __await__(self):
+        yield self
+
+
+class _Pin:
+    """out_1-4 / in_1-4 wie machine.Pin: value(), value(v), on(), off()."""
+
+    def __init__(self, get, put=None):
+        self._get, self._put = get, put
+
+    def value(self, v=None):
+        if v is None:
+            return self._get()
+        if self._put:
+            self._put(1 if v else 0)
+
+    __call__ = value
+
+    def on(self):
+        self.value(1)
+
+    def off(self):
+        self.value(0)
+
+
+class _Pixels:
+    """np wie LimitedPixels der Firmware: 64 LEDs, Index x * 8 + y (y = 0 unten), write() zeigt an."""
+
+    def __init__(self, matrix):
+        self._matrix = matrix
+        self._buf = [(0, 0, 0)] * 64
+        self.n = 64
+        self.version = 0
+
+    def __len__(self):
+        return self.n
+
+    def __setitem__(self, i, color):
+        self._buf[i] = tuple(int(v) & 255 for v in tuple(color)[:3])
+
+    def __getitem__(self, i):
+        return self._buf[i]
+
+    def fill(self, color):
+        c = tuple(int(v) & 255 for v in tuple(color)[:3])
+        self._buf = [c] * 64
+
+    def write(self):
+        self.version += 1
+        self._matrix.show_raw(self._buf)
+
+
+class ScriptRunner:
+    """Userscript des ESP2090 als Peripherie: Ausgaenge des ESP = Eingaenge des 2090."""
+
+    def __init__(self, cpu, matrix):
+        self.cpu, self.matrix = cpu, matrix
+        self.path = ""               # geladenes Script (Taste y)
+        self.code = ""               # Inhalt beim Laden (Vorschau)
+        self.problem = None          # Pruefung beim Laden (Warnung wie beim Speichern)
+        self.name = ""               # laufendes Script
+        self.coro = None
+        self.wake = 0
+        self.now = 0                 # Zeit des ESP in 0,1 ms
+        self._real = None            # Bezug Echtzeit (monotonic) oder ...
+        self._cpu = None             # ... simulierte Zeit der CPU
+        self.out = 0                 # setOutputs: Eingaenge 1-4 des 2090
+        self.log_lines = []
+        self.tasteG = {"pressed": False}
+        self.tasteH = {"pressed": False}
+        self.key_end = {"G": 0, "H": 0}
+        self.beeps = []
+        self.tone = 0                # aktuelle Frequenz, 0 = still
+        self.tone_end = None
+        self.np = _Pixels(matrix)
+        self.asyncio = types.ModuleType("uasyncio")
+        self.asyncio.sleep_ms = lambda ms: _Sleep(ms)
+        self.asyncio.sleep = lambda sec: _Sleep(sec * 1000)
+        self.asyncio.CancelledError = ScriptCancelled
+        t = types.ModuleType("time")
+        t.ticks_ms = lambda: self.now // 10
+        t.ticks_us = lambda: self.now * 100
+        t.ticks_diff = lambda a, b: a - b
+        t.ticks_add = lambda a, b: a + b
+        t.sleep = t.sleep_ms = t.sleep_us = lambda *a: None      # die Pruefung verbietet sie
+        t.__getattr__ = lambda name: getattr(time, name)          # time(), localtime() ...
+        self.time_mod = t
+
+    # ---- Zeit
+    def clock_real(self):
+        """Ausserhalb von RUN: die Zeit des ESP laeuft in Echtzeit."""
+        r = time.monotonic()
+        if self._real is not None:
+            n = int((r - self._real) * 10000)
+            self.now += n
+            self._real += n / 10000
+        else:
+            self._real = r
+        self._cpu = None
+        self._run_due()
+
+    def clock_cpu(self, t):
+        """Im Lauf: die Zeit des ESP folgt der simulierten Zeit der CPU."""
+        if self._cpu is not None and t > self._cpu:
+            self.now += t - self._cpu
+        self._cpu, self._real = t, None
+        self._run_due()
+
+    # ---- Peripherie (Microtronic.peripherals)
+    def tick(self, t):
+        self.clock_cpu(t)
+
+    def dot(self, v, t=0):
+        pass
+
+    def din_bits(self, t=0):
+        return self.out
+
+    # ---- Funktionen fuer das Script (wie die Firmware)
+    def set_outputs(self, value):
+        self.out = int(value) & 0xF
+
+    def _put_bit(self, bit):
+        return lambda v: self.set_outputs((self.out & ~(1 << bit)) | (v << bit))
+
+    def get_inputs(self):
+        return self.cpu.dout & 0xF
+
+    async def wait_inputs(self, value=None, timeout_ms=None):
+        start = self.now
+        old = self.get_inputs()
+        while True:
+            v = self.get_inputs()
+            if (v == value) if value is not None else (v != old):
+                return v
+            if timeout_ms is not None and self.now - start >= timeout_ms * 10:
+                return None
+            await _Sleep(5)
+
+    def log(self, msg):
+        self.log_lines.append(str(msg)[:100])
+        del self.log_lines[:-SCRIPT_LOG_SIZE]
+
+    def beep(self, freq, duration_ms=None):
+        if len(self.beeps) < BEEP_QUEUE_MAX:
+            self.beeps.append((freq, duration_ms))
+
+    def set_colors(self, names):
+        if not self.matrix.set_colors(names):
+            self.log("Error: color matrix must be 8x8")
+
+    def set_palette(self, index, rgb):
+        if not self.matrix.set_palette(index, rgb):
+            self.log("Error: palette has colors 0-15")
+
+    def _import(self, name, globals=None, locals=None, fromlist=(), level=0):
+        if name in ("uasyncio", "asyncio"):
+            return self.asyncio
+        if name in ("time", "utime"):
+            return self.time_mod
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    def namespace(self):
+        bi = dict(vars(builtins))
+        bi["__import__"] = self._import
+        bi["print"] = lambda *a, sep=" ", **k: self.log(sep.join(str(x) for x in a))
+        bits = lambda b: (lambda: (self.out >> b) & 1)
+        ins = lambda b: (lambda: (self.cpu.dout >> b) & 1)
+        ns = {"__builtins__": bi, "setOutputs": self.set_outputs, "getInputs": self.get_inputs,
+              "waitInputs": self.wait_inputs, "tasteG": self.tasteG, "tasteH": self.tasteH,
+              "log": self.log, "beep": self.beep, "setColors": self.set_colors,
+              "setPalette": self.set_palette, "np": self.np}
+        for b in range(4):
+            ns[f"out_{b + 1}"] = _Pin(bits(b), self._put_bit(b))
+            ns[f"in_{b + 1}"] = _Pin(ins(b))
+        return ns
+
+    # ---- Laden, Start, Stop
+    def load(self, path):
+        with open(path, encoding="utf-8") as f:
+            self.code = f.read()
+        self.path = path
+        self.problem = script_problem(self.code)
+
+    def start(self):
+        """Wie /run: Text der Antwort."""
+        if self.coro:
+            return "Script already running"
+        name = self.path
+        try:
+            with open(name, encoding="utf-8") as f:     # immer frisch von der Platte
+                code = f.read()
+        except OSError:
+            return "File not found: " + name
+        self.code = code
+        self.problem = problem = script_problem(code)
+        if problem:
+            return "Not started: " + problem
+        wrapped = "\nimport uasyncio as asyncio\nasync def __user_task():\n" + \
+            "\n".join("    " + line for line in code.split("\n")) + "\n"
+        ns = self.namespace()
+        try:
+            exec(compile(wrapped, "<string>", "exec"), ns)
+            self.coro = ns["__user_task"]()
+        except Exception as e:
+            self._error(e, code)
+            self.set_outputs(0)
+            return "Started " + name
+        self.name, self.wake = name, self.now
+        self._code_lines = code.count("\n") + 1
+        self.log("User script started")
+        return "Started " + name
+
+    def stop(self):
+        """Wie /stop: abbrechen, Ausgaenge 0, Ton aus."""
+        if not self.coro:
+            return "No script"
+        self._resume(ScriptCancelled())
+        if self.coro:                                     # Script hat den Abbruch abgefangen
+            try:
+                self.coro.close()
+            except BaseException:
+                pass
+            self.log("User script stopped")
+            self._end()
+        self.set_outputs(0)
+        self.beeps.clear()
+        self.tone, self.tone_end = 0, None
+        return "Stopped"
+
+    def press_web(self, key):
+        """Web-Taste G oder H: 0,5 s gedrueckt (wie die Weboberflaeche)."""
+        (self.tasteG if key == "G" else self.tasteH)["pressed"] = True
+        self.key_end[key] = self.now + WEB_KEY_TIME
+        self.log(f"Key {key} pressed")
+
+    # ---- Ablauf
+    def busy(self):
+        """Braucht Zeit, auch wenn der 2090 steht."""
+        return bool(self.coro or self.beeps or self.tone or self.tasteG["pressed"]
+                    or self.tasteH["pressed"])
+
+    def _run_due(self):
+        for key, d in (("G", self.tasteG), ("H", self.tasteH)):
+            if d["pressed"] and self.now >= self.key_end[key]:
+                d["pressed"] = False
+        self._sound()
+        for _ in range(SCRIPT_RESUMES):
+            if not self.coro or self.now < self.wake:
+                return
+            self._resume()
+            if self.coro and self.wake <= self.now:       # sleep_ms(0): im naechsten Takt weiter
+                return
+        self.wake = self.now                              # Zeit ist gesprungen: nicht nachholen
+
+    def _resume(self, exc=None):
+        try:
+            req = self.coro.throw(exc) if exc else self.coro.send(None)
+        except StopIteration:
+            self._end()
+            return
+        except ScriptCancelled:
+            self.log("User script stopped")
+            self._end()
+            return
+        except KeyboardInterrupt:
+            raise
+        except BaseException as e:                       # auch SystemExit: nur das Script endet
+            self._error(e, self.code)
+            self._end()
+            return
+        self.wake = self.now + (max(0, int(req.ms * 10)) if isinstance(req, _Sleep) else 0)
+
+    def _end(self):
+        self.coro = None
+        self.set_outputs(0)                               # auch nach normalem Ende oder Fehler
+
+    def _error(self, e, code):
+        line = None
+        if isinstance(e, SyntaxError) and getattr(e, "lineno", None):
+            line = e.lineno
+        else:
+            import traceback
+            for fr in traceback.extract_tb(e.__traceback__):
+                if fr.filename == "<string>":
+                    line = fr.lineno
+        if line is not None:
+            line -= SCRIPT_LINE_OFFSET
+            line = min(line, code.count("\n") + 1) if line >= 1 else None
+        text = type(e).__name__ + (": " + str(e) if str(e) else "")
+        self.log("ERROR " + ("line {}: ".format(line) if line else "") + text)
+
+    def _sound(self):
+        while True:
+            if self.tone_end is not None:
+                if self.now < self.tone_end:
+                    return
+                self.tone, self.tone_end = 0, None
+            if not self.beeps:
+                return
+            freq, dur = self.beeps.pop(0)
+            self.tone = max(0, int(freq))
+            self.tone_end = None if dur is None else self.now + int(dur * 10)
+
+
 class LiveKeys:
     """Windows: echter Tastenzustand ueber GetAsyncKeyState (user32).
 
@@ -1041,6 +1538,7 @@ def screen_stop():
 # (0 schwarz, 1 rot, 2 gruen, 3 gelb, 4 blau, 5 magenta, 6 cyan, 7 weiss, +8 = hell).
 MARK_LO, MARK_HI = "\ue000", "\ue0ff"
 MARK_RESET = "\ue0ff"
+MARK_RGB = 0xF0000                           # + 12 Bit Farbe (je 4 Bit r, g, b): Matrix-LEDs
 LED_RED = 9                                  # Farbe der LEDs, Segmente und Matrix-Sterne
 COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -1050,19 +1548,32 @@ def col(text, c):
     return chr(0xE000 + c) + text + MARK_RESET
 
 
+def col_rgb(text, rgb):
+    """Text in der Farbe einer LED (r, g, b in der Helligkeit der Firmware, 10 = hell)."""
+    q = [round(min(255, v * 25 + (5 if v else 0)) / 17) for v in rgb]
+    return chr(MARK_RGB + (q[0] << 8 | q[1] << 4 | q[2])) + text + MARK_RESET
+
+
+def is_mark(ch):
+    return MARK_LO <= ch <= MARK_HI or ord(ch) >= MARK_RGB
+
+
 def vlen(text):
     """Sichtbare Laenge ohne Farbmarkierungen."""
-    return sum(1 for ch in text if not MARK_LO <= ch <= MARK_HI)
+    return sum(1 for ch in text if not is_mark(ch))
 
 
 def colorize(line):
     out = []
     for ch in line:
-        if MARK_LO <= ch <= MARK_HI:
+        if is_mark(ch):
             if not COLOR:
                 continue
             n = ord(ch) - 0xE000
-            if ch == MARK_RESET:
+            if ord(ch) >= MARK_RGB:
+                n = ord(ch) - MARK_RGB
+                out.append(f"\033[38;2;{(n >> 8) * 17};{(n >> 4 & 15) * 17};{(n & 15) * 17}m")
+            elif ch == MARK_RESET:
                 out.append("\033[0m")
             elif n >= 16:                        # Matrix-Palette (16 + Farbnummer), 24 Bit
                 r, g, b = (min(255, v * 25 + (5 if v else 0)) for v in PALETTE[n - 16])
@@ -1096,7 +1607,8 @@ KEYMAP = {"h": "HALT", "n": "NEXT", " ": "SPACE", "r": "RUN", "s": "STEP",
           "g": "REG", "k": "BKP", "p": "PGM", "x": "CCE",
           "l": "LOAD", "w": "SAVE", "i": "DEBUG", "o": "WIRE", "v": "VIEW",
           "z": "RESET", "m": "MATRIX", "t": "TMAP", "?": "HELP", "+": "FASTER", "=": "FASTER",
-          "-": "SLOWER", "_": "SLOWER", "q": "QUIT", "u": "RNDMODE"}
+          "-": "SLOWER", "_": "SLOWER", "q": "QUIT", "u": "RNDMODE",
+          "y": "SCRIPT", "j": "SCRIPTRUN"}
 
 
 class Keyboard:
@@ -1105,6 +1617,7 @@ class Keyboard:
     def __init__(self):
         self.fd = sys.stdin.fileno()
         self.old = None
+        self.web_keys = None       # f() -> True: G und H (Shift) sind die Web-Tasten eines Userscripts
 
     def __enter__(self):
         if sys.stdin.isatty() and termios:
@@ -1175,6 +1688,8 @@ class Keyboard:
             return "CCE"
         if t == "ESC" or t in TASTER_KEYS:
             return t
+        if t in ("G", "H") and self.web_keys and self.web_keys():
+            return "WEB" + t
         if len(t) == 1:
             lc = t.lower()
             if lc in HEXDIGITS:
@@ -1243,7 +1758,7 @@ def fit(text, width):
         return text + " " * (width - n)
     out, n = [], 0
     for ch in text:
-        if not MARK_LO <= ch <= MARK_HI:
+        if not is_mark(ch):
             if n == width:
                 break
             n += 1
@@ -1259,7 +1774,9 @@ class Emulator:
         self.cpu = Microtronic([0] * 256, din=[0])
         self.matrix = LedMatrix()
         self.keypad = Keypad(live_keys())
-        self.view = "prog"            # rechtes Feld: prog oder matrix (Taste v)
+        self.script = ScriptRunner(self.cpu, self.matrix)   # Userscript des ESP (Tasten y, j)
+        kb.web_keys = lambda: self.script.coro is not None
+        self.view = "prog"            # rechtes Feld: prog, matrix oder script (Taste v)
         self.speed_idx = SPEED_ORIGINAL   # Faktor 1 = Originalgeschwindigkeit
         self.debug = False            # Debug-Modus: HALT/Haltepunkt behalten den Display-Zustand
         self.filename = ""
@@ -1293,6 +1810,7 @@ class Emulator:
         cpu.key_source = self.kin_key
         cpu.peripherals.append(self.matrix)      # Matrix und Tastaturen sind immer angeschlossen
         cpu.peripherals.append(self.keypad)
+        cpu.peripherals.append(self.script)
         cpu.idle(True)                           # RND-Zaehler laeuft im Leerlauf in Echtzeit
         self.matrix.on_frame = lambda m: self.render(force=False)
 
@@ -1441,8 +1959,34 @@ class Emulator:
         rows.append("    1  2  3  4")                    # Spaltennummern unten
         return rows
 
+    def script_rows(self):
+        """Rechtes Feld, Ansicht Script: Name, Zustand, Ton, Web-Tasten, Log (oder Vorschau)."""
+        sc, w = self.script, W_RIGHT - 1
+        state = "laeuft" if sc.coro else "bereit" if sc.path else "leer"
+        name = os.path.basename(sc.name if sc.coro else sc.path) or "(y = laden)"
+        info = (f"Ton {sc.tone}Hz" if sc.tone else "") + \
+               (" G" if sc.tasteG["pressed"] else "") + (" H" if sc.tasteH["pressed"] else "")
+        rows = [f" SCRIPT {state}", " " + short_name(name, w - 1), " " + info.strip()]
+        body = []
+        if sc.problem and not sc.coro:                    # Warnung wie beim Speichern (orange)
+            body += [col(t, 3) for t in self._wrap("Warnung: " + sc.problem, w)]
+        if sc.log_lines:
+            for line in sc.log_lines[-10:]:
+                body += [col(t, 9) if line.startswith("ERROR") else t for t in self._wrap(line, w)]
+        elif sc.code:
+            body += [line.replace("\t", " ")[:w] for line in sc.code.split("\n")]
+            body = body[:10]
+        rows += [" " + t for t in body[-10:]]
+        return (rows + [""] * 13)[:13]
+
+    @staticmethod
+    def _wrap(text, w):
+        return [text[i:i + w] for i in range(0, len(text), w)] or [""]
+
     def right_rows(self):
         c = self.cpu
+        if self.view == "script":
+            return self.script_rows()
         if self.view == "matrix":
             m = self.matrix
             status = f"B{m.frames} Z{m.cmds}"             # Bilder (Blockmodus) und Zeichenbefehle
@@ -1451,8 +1995,8 @@ class Emulator:
             status = f"{status} {m.receiving()}".rstrip()
             top = "   " + "_" * 15                       # obere Begrenzung
             sep = lambda y: " " if y == 0 else "."       # Reihe 1 ohne Trennpunkte
-            dot = lambda c: " " if c is None else col("*", 16 + c)
-            rows = [f"{y + 1} |" + sep(y).join(dot(m.pixel(x, y)) for x in range(8)) + "|"
+            dot = lambda rgb: " " if rgb is None else col_rgb("*", rgb)
+            rows = [f"{y + 1} |" + sep(y).join(dot(m.pixel_rgb(x, y)) for x in range(8)) + "|"
                     for y in range(7, -1, -1)]
             bottom = "   " + BOTTOM_CHAR * 15              # untere Begrenzung
             title = "MATRIX ESP" + (
@@ -1492,7 +2036,7 @@ class Emulator:
         return ([bar, head, top] + body + [bottom, text(msg),
                 text("h HALT  n NEXT  r RUN  s STEP  g REG  k BKP  p PGM  x C/CE  0-9 a-f Hex"),
                 text("l Laden  w Sichern  i Debug  o Quelle  m Matrix  +/- Tempo  v Sicht  z Reset"),
-                text("? Hilfe  q Ende  t Taster  u RND  Leertaste: NEXT, im Lauf Pause  Esc"), bar])
+                text("? Hilfe  q Ende  t Taster  u RND  y Script  j Start/Stop  Leer = NEXT/Pause"), bar])
 
     def render(self, force=True):
         now = time.time()
@@ -1566,11 +2110,11 @@ class Emulator:
             " Ablauf:   h n aa Adresse   h g r Register   h k aa Haltepunkt (00 = loeschen)",
             "           h p n = Festprogramm: 3 Uhr stellen, 4 Uhr, 5 = 000, 6 = F01, 7 Nim",
             " Lauf:     Leertaste = Pause / weiter   0-9 a-f Keypad   Pfeile = Taster",
-            " Emulator: l Laden  w Sichern  z Reset (Tempo bleibt)  v Ansicht  t 1-4 Taster",
-            "           u RND: mic = Zaehler wie das Geraet, emu = Zufall      q Ende",
-            "           m Matrix: aus <-> an (ESP2090-Studio: REQ/ACK, Zeichenbefehle)",
-            "           i Debug: HALT/Haltepunkt behalten Display-Zustand und Timing",
+            " Emulator: l Laden  w Sichern  z Reset (Tempo bleibt)  t 1-4 Taster  q Ende",
+            "           v Ansicht: Programm / Matrix / Script   m Matrix aus <-> an",
+            "           i Debug (HALT behaelt Timing)   u RND: mic = Zaehler, emu = Zufall",
             "           o Quellen: ^v Eingang, <> Quelle, +/- Takt, x loescht (2x = alle)",
+            " Script:   y Laden (.py)  j Start/Stop  G/H mit Shift = Web-Tasten (im Lauf)",
             " Anzeige:  DISP bleibt live bis DISP/DISOUT/HALT; HALT zeigt Adresse + Befehl",
         ]
         self.show("HILFE", lines, "beliebige Taste = zurueck", blank=False)
@@ -1641,6 +2185,61 @@ class Emulator:
                 self.load_file(name)
         else:
             self.load_file(shown[LOAD_KEYS.index(choice)])
+
+    def dlg_script(self):
+        """Userscript waehlen (.py im Ordner und in userscripts/); laden, noch nicht starten."""
+        own = os.path.basename(os.path.abspath(sys.argv[0] or __file__))
+        files = []
+        for d in (".", "userscripts"):
+            try:
+                names = sorted(os.listdir(d), key=str.lower)
+            except OSError:
+                continue
+            files += [f if d == "." else f"{d}/{f}" for f in names
+                      if f.lower().endswith(".py") and f != own and f != os.path.basename(__file__)]
+        shown = files[:len(LOAD_KEYS)]
+        nrows = -(-len(shown) // 3)                         # 3 Spalten, erst senkrecht
+        lines = [" " + "".join(
+            fit(f"{LOAD_KEYS[c * nrows + r]} {short_name(shown[c * nrows + r], 22)}", 25)
+            for c in range(3) if c * nrows + r < len(shown)) for r in range(nrows)]
+        if not shown:
+            lines = [" (keine .py-Dateien im Ordner oder in userscripts/)"]
+        elif len(files) > len(shown):
+            lines.append(f" ... {len(files) - len(shown)} weitere Dateien (Leertaste: Namen eingeben)")
+        choice = None
+        try:
+            self.show(f"USERSCRIPT LADEN   Ordner: {os.getcwd()}", lines,
+                      "Taste waehlen   Leertaste = Name eingeben   Esc = Abbruch")
+            while choice is None:
+                t = self.kb.read_raw()
+                if t == "EOF":
+                    raise QuitRequest
+                if t == "ESC":
+                    return
+                if t == " ":
+                    choice = " "
+                elif len(t) == 1 and t.lower() in LOAD_KEYS[:len(shown)]:
+                    choice = t.lower()
+        finally:
+            self.dialog = None
+        if choice == " ":
+            path = self.prompt_text("USERSCRIPT LADEN - Dateiname", self.script.path)
+            if not path:
+                return
+            path = os.path.expanduser(path)
+            if not os.path.splitext(path)[1]:
+                path += ".py"
+        else:
+            path = shown[LOAD_KEYS.index(choice)]
+        try:
+            self.script.load(path)
+        except (OSError, UnicodeDecodeError) as e:
+            self.msg = f"Fehler beim Laden: {getattr(e, 'strerror', None) or e}"
+            return
+        self.view = "script"
+        sc = self.script
+        self.msg = (f"Script {os.path.basename(path)} geladen" + (", Warnung siehe rechts" if sc.problem else "")
+                    + (" - j = Start" if not sc.coro else " - es laeuft noch das alte, j = Stop"))
 
     def save_program(self, path):
         path = os.path.expanduser(path)
@@ -1734,7 +2333,22 @@ class Emulator:
             self.change_speed(-1)
             return True
         if k == "VIEW":
-            self.view = "prog" if self.view == "matrix" else "matrix"
+            self.view = {"prog": "matrix", "matrix": "script"}.get(self.view, "prog")
+            return True
+        if k == "SCRIPT":
+            self.dlg_script()
+            return True
+        if k == "SCRIPTRUN":                              # Start / Stop wie Run / Stop im Browser
+            sc = self.script
+            if sc.coro:
+                self.msg = "Script: " + sc.stop()
+            elif not sc.path:
+                self.msg = "Kein Userscript geladen - erst mit y laden"
+            else:
+                self.msg = "Script: " + sc.start()
+            return True
+        if k in ("WEBG", "WEBH"):
+            self.script.press_web(k[-1])
             return True
         if k == "TMAP":                                   # Belegungsmodus der Taster einschalten
             self.taster_mode = True
@@ -2078,7 +2692,12 @@ class Emulator:
         try:
             self.render()
             while True:
-                k = self.kb.read(0.1 if cpu.has_signals() else None)
+                timeout = 0.1 if cpu.has_signals() else None
+                if self.script.busy():       # Userscript laeuft in Echtzeit weiter
+                    timeout = 0.02
+                self.script.clock_real()
+                k = self.kb.read(timeout)
+                self.script.clock_real()
                 if k is None:                # Zeitablauf: Signalanzeige auffrischen
                     self.render()
                     continue
@@ -2107,7 +2726,11 @@ class Emulator:
                 timeout = 0.25 if self.mode == "TIMESET" and not self.buf else None
                 if self.cpu.has_signals():          # Signale laufen auch ohne Programm
                     timeout = 0.1
+                if self.script.busy():               # Userscript laeuft auch ohne Programm
+                    timeout = 0.02
+                self.script.clock_real()
                 k = self.kb.read(timeout)
+                self.script.clock_real()
                 if k is not None:
                     self.handle(k)
                 self.render()
