@@ -1538,7 +1538,16 @@ def screen_stop():
 # (0 schwarz, 1 rot, 2 gruen, 3 gelb, 4 blau, 5 magenta, 6 cyan, 7 weiss, +8 = hell).
 MARK_LO, MARK_HI = "\ue000", "\ue0ff"
 MARK_RESET = "\ue0ff"
-MARK_RGB = 0xF0000                           # + 12 Bit Farbe (je 4 Bit r, g, b): Matrix-LEDs
+MARK_RGB = 0xF0000                           # + Nummer einer RGB-Farbe in RGB_COLORS: Matrix-LEDs
+RGB_COLORS = []                              # Bildschirmfarben (r, g, b, je 0-255) der Matrix-LEDs
+RGB_INDEX = {}
+# LED -> Bildschirm: Die Werte der Firmware sind Lichtstaerke (linear, 10 = volle Farbe der
+# Palette). Das Auge sieht schwache LEDs viel heller, als ein linear umgerechneter Bildschirmwert
+# wirkt; deshalb Gamma-Kodierung wie sRGB. Werte ueber LED_FULL werden im Verhaeltnis verkleinert,
+# damit der Farbton bleibt (nicht je Kanal abgeschnitten).
+LED_FULL = 10
+LED_GAMMA = 2.2
+LED_CHAR = "\u2588"                          # LED an: volles Kaestchen (ohne Farbe: *)
 LED_RED = 9                                  # Farbe der LEDs, Segmente und Matrix-Sterne
 COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
@@ -1548,10 +1557,20 @@ def col(text, c):
     return chr(0xE000 + c) + text + MARK_RESET
 
 
+def led_screen_rgb(rgb):
+    """Farbe einer LED (r, g, b in der Helligkeit der Firmware) als Bildschirmfarbe 0-255."""
+    top = max(max(rgb), LED_FULL)
+    return tuple(round(255 * (max(0, v) / top) ** (1 / LED_GAMMA)) for v in rgb)
+
+
 def col_rgb(text, rgb):
     """Text in der Farbe einer LED (r, g, b in der Helligkeit der Firmware, 10 = hell)."""
-    q = [round(min(255, v * 25 + (5 if v else 0)) / 17) for v in rgb]
-    return chr(MARK_RGB + (q[0] << 8 | q[1] << 4 | q[2])) + text + MARK_RESET
+    c = led_screen_rgb(rgb)
+    n = RGB_INDEX.get(c)
+    if n is None:
+        n = RGB_INDEX[c] = len(RGB_COLORS)
+        RGB_COLORS.append(c)
+    return chr(MARK_RGB + n) + text + MARK_RESET
 
 
 def is_mark(ch):
@@ -1571,12 +1590,12 @@ def colorize(line):
                 continue
             n = ord(ch) - 0xE000
             if ord(ch) >= MARK_RGB:
-                n = ord(ch) - MARK_RGB
-                out.append(f"\033[38;2;{(n >> 8) * 17};{(n >> 4 & 15) * 17};{(n & 15) * 17}m")
+                r, g, b = RGB_COLORS[ord(ch) - MARK_RGB]
+                out.append(f"\033[38;2;{r};{g};{b}m")
             elif ch == MARK_RESET:
                 out.append("\033[0m")
             elif n >= 16:                        # Matrix-Palette (16 + Farbnummer), 24 Bit
-                r, g, b = (min(255, v * 25 + (5 if v else 0)) for v in PALETTE[n - 16])
+                r, g, b = led_screen_rgb(PALETTE[n - 16])
                 out.append(f"\033[38;2;{r};{g};{b}m")
             else:
                 out.append(f"\033[{30 + n if n < 8 else 82 + n}m")
@@ -1995,7 +2014,7 @@ class Emulator:
             status = f"{status} {m.receiving()}".rstrip()
             top = "   " + "_" * 15                       # obere Begrenzung
             sep = lambda y: " " if y == 0 else "."       # Reihe 1 ohne Trennpunkte
-            dot = lambda rgb: " " if rgb is None else col_rgb("*", rgb)
+            dot = lambda rgb: " " if rgb is None else col_rgb(LED_CHAR if COLOR else "*", rgb)
             rows = [f"{y + 1} |" + sep(y).join(dot(m.pixel_rgb(x, y)) for x in range(8)) + "|"
                     for y in range(7, -1, -1)]
             bottom = "   " + BOTTOM_CHAR * 15              # untere Begrenzung
