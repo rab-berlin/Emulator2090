@@ -38,11 +38,14 @@ T_DISP_FIRST = 37     # erste angezeigte Stelle: +3,7 ms
 T_DISP_MORE = 25      # jede weitere Stelle: +2,5 ms
 T_DEFAULT_DISP = 205  # Standardanzeige ohne DISP (Adresse, Befehl): 20,5 ms
 
-# RND-Zaehler (am echten Geraet gemessen, siehe rnd-zaehler-protokoll.md):
-# 12 Bit, +3 je ausgefuehrtem Befehl (unabhaengig von der Anzeige), im Leerlauf, im HALT-Zustand
-# und waehrend KIN wartet zeitabhaengig ca. 205 Schritte/s; RESET setzt ihn auf 000.
+# RND-Zaehler (am echten Geraet gemessen, siehe rnd-zaehler-protokoll.md, Messreihen 1-9):
+# 12 Bit, +3 je ausgefuehrtem Befehl (unabhaengig von der Anzeige), ausser: BRC/BRZ ohne Sprung +1,
+# DISP +4. Im Leerlauf, im HALT-Zustand und waehrend KIN wartet zeitabhaengig ca. 210 Schritte/s
+# (Geraet 1; Geraet 2: 223/s, Streuung des RC-Takts); RESET setzt ihn auf 000.
 CTR_STEP = 3          # Zaehlschritte je Befehl
-CTR_RATE = 205        # Zaehlschritte je Sekunde Echtzeit im Leerlauf
+CTR_STEP_NO_JUMP = 1  # BRC/BRZ, die nicht springen (gemessen 19.11.2026, zwei Geraete)
+CTR_STEP_DISP = 4     # DISP n,s, unabhaengig von n (gemessen 19.11.2026, zwei Geraete)
+CTR_RATE = 210        # Zaehlschritte je Sekunde Echtzeit im Leerlauf (Geraet 1, Stoppuhr 2 x 15 s)
 
 HEXRE = re.compile(r"^[0-9A-Fa-f]{3}$")
 TWO = ["MOV", "MOVI", "AND", "ANDI", "ADD", "ADDI", "SUB", "SUBI", "CMP", "CMPI", "OR"]
@@ -381,6 +384,7 @@ class Microtronic:
         op, a, b = code >> 8, (code >> 4) & 0xF, code & 0xF
         nxt = (self.pc + 1) & 0xFF   # Adressraum 00-FF, nach FF folgt 00
         R = self.R
+        ctr_step = CTR_STEP              # Zaehlschritte dieses Befehls
 
         if op <= 0xA:
             self.two_address(op, a, b)
@@ -395,12 +399,15 @@ class Microtronic:
                 nxt = aa
             elif op == 0xE and self.Z:
                 nxt = aa
+            else:                            # BRC/BRZ ohne Sprung: Zaehler nur +1
+                ctr_step = CTR_STEP_NO_JUMP
         elif a == 0:
             nxt = self.special(b, nxt)
             if self.error:
                 return False
         elif a <= 6:
             self.show(a, b)
+            ctr_step = CTR_STEP_DISP         # DISP: Zaehler +4
         else:
             d = s = b
             if a == 7:                       # MAS
@@ -453,7 +460,7 @@ class Microtronic:
             cells = self.live_cells()
             if cells != self.last_cells:
                 self.emit(cells)
-        self.ctr = (self.ctr + CTR_STEP) & 0xFFF   # nach dem Befehl (Sonderbefehle setzen ihn vorher)
+        self.ctr = (self.ctr + ctr_step) & 0xFFF   # nach dem Befehl (Sonderbefehle setzen ihn vorher)
         self.time += dur
         for per in self.peripherals:         # Geraete mit eigener Zeit (ESP) bis Befehlsende laufen lassen
             tick = getattr(per, "tick", None)
@@ -2388,7 +2395,7 @@ class Emulator:
         if k == "RNDMODE":
             cpu = self.cpu
             cpu.rnd_counter = not cpu.rnd_counter
-            self.msg = ("RND: Zaehler wie das Geraet (+3 je Befehl, 205/s im Leerlauf)"
+            self.msg = ("RND: Zaehler wie das Geraet (+3 je Befehl, BRC/BRZ ohne Sprung +1, DISP +4)"
                         if cpu.rnd_counter else "RND: echter Zufall (3 zufaellige Hex-Ziffern)")
             return True
         if k == "WIRE":
@@ -2706,7 +2713,7 @@ class Emulator:
         was_live = cpu.live
         cpu.live = False                     # waehrend KIN wartet laufen die Signale in Echtzeit
         was_idle = cpu._idle_t is not None
-        cpu.idle(True)                       # ... und der RND-Zaehler (205/s)
+        cpu.idle(True)                       # ... und der RND-Zaehler (CTR_RATE/s)
         self.msg = "KIN wartet - Hex-Taste druecken (h = abbrechen)"
         try:
             self.render()

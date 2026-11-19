@@ -11,7 +11,7 @@ Benötigt ein Terminal mit mindestens 80 x 22 Zeichen. Läuft unter Linux, macOS
 ## Was er kann
 
 - **Befehlssatz** des 2090 vollständig, mit der am Gerät gemessenen Befehlsdauer: 9,3 ms bei ausgeschalteter Anzeige, länger mit DISP.
-- **Zufallszahlen wie am Gerät:** RND liest einen 12-Bit-Zähler. Er zählt +3 je Befehl und etwa 205 Schritte/s im Leerlauf, und einige Befehle setzen ihn auf feste Werte. Taste `u` schaltet auf echten Zufall um.
+- **Zufallszahlen wie am Gerät:** RND liest einen 12-Bit-Zähler. Er zählt +3 je Befehl (BRC/BRZ ohne Sprung +1, DISP +4) und etwa 210 Schritte/s im Leerlauf, und einige Befehle setzen ihn auf feste Werte. Taste `u` schaltet auf echten Zufall um.
 - **Einschaltzustand wie am Gerät:** RF = F, alle anderen Register 0.
 - **Festprogramme:** PGM 3/4 (Uhr), PGM 5/6.
 - **Peripherie:** Eingangsquellen (Kabel, Rechteck, Rauschen, Zufallszahl), 4 Taster, ein 4x4-Keypad.
