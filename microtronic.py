@@ -8,6 +8,7 @@ Monitor, Panel und alle Einstellungen sind immer aktiv:
   Emulator       l Laden, w Sichern, i Debug, o Quellen, m Matrix, t Tasterbelegung, +/- Tempo, v Ansicht,
                  u RND-Modus (Zaehler / Zufall), z Reset, ? Hilfe, q Ende
                  y Userscript laden, j Userscript Start / Stop, G / H (Shift) Web-Tasten
+                 M (Shift) LED rotation 0/90/180/270 Grad
                  Leertaste: NEXT, im Programmlauf Pause / weiter
 """
 import builtins
@@ -606,7 +607,8 @@ ESP_NIBBLE = 92.17      # NIBBLE_INTERVAL 9,217 ms
 ESP_AFTER_CMD = 100     # nach jeder Uebertragung 10 ms, dann neues REQ
 ESP_WAKE_REQ = 2000     # erstes REQ nach dem Wecken: bis 200 ms auf das ACK warten
 ESP_HOLD = 400          # steht das F eines ACK 15 nach 40 ms noch, ist es ein Wecksignal
-ESP_NIBBLES = (0, 16, 0, 1, 2, 0, 2, 2, 2, 0, 2, 1, 0, 1, 1, 0)   # Nibbles je ACK (15 = schlafen)
+ESP_NIBBLES = (0, 16, 0, 1, 2, 0, 2, 2, 2, 2, 2, 1, 0, 1, 1, 0)   # Nibbles je ACK (15 = schlafen)
+ESP_ROTATIONS = (0, 90, 180, 270)   # LED rotation der Weboberflaeche (Grad im Uhrzeigersinn)
 ESP_STACK = 8           # Plaetze je Stapel (ACK 13)
 # Palette der Firmware (PALETTE_DEFAULT, Helligkeit 0-10) und Namen
 PALETTE = ((0, 0, 0), (10, 0, 0), (10, 4, 0), (10, 10, 0), (0, 8, 0), (0, 8, 6), (0, 0, 10),
@@ -619,7 +621,8 @@ PALETTE_NAMES = ("schwarz", "rot", "orange", "gelb", "gruen", "tuerkis", "blau",
 
 
 class LedMatrix:
-    """8x8-LED-Matrix am ESP2090-Studio als Peripherie (Protokoll v2, docs/LED-Matrix.md).
+    """8x8-LED-Matrix am ESP2090-Studio als Peripherie (Protokoll wie esp2090-firmware,
+    docs/Matrix-Protokoll.md Version 16: auch ACK 9 Kreis/Raute und LED rotation).
 
     Zwei Ebenen mit je 64 Eintraegen, Index y*8 + x (x = Spalte 0 links, y = Zeile 0 unten):
     bits (Pixel an/aus) und colors (Farbnummer 0-15 der Palette, anfangs 1 = rot).
@@ -646,6 +649,7 @@ class LedMatrix:
         self.active = False        # LED on/off der Weboberflaeche (Taste m), anfangs aus
         self.palette = list(PALETTE)   # setPalette (Userscript) aendert sie; LED aus und Reset nicht
         self.raw = None            # Bild, das ein Userscript direkt mit np.write() geschrieben hat
+        self.rotation = 0          # LED rotation (Shift+M): dreht nur die LEDs, nicht die Koordinaten
         self.reset()
 
     # ---- Speicher (matrix_draw.Matrix) ----
@@ -685,9 +689,36 @@ class LedMatrix:
         self.data = []
 
     def toggle(self):
-        """LED on/off (Taste m)."""
+        """LED on/off (Taste m). LED off loescht Bit- und Farbmatrix, Stapel, Cursor und aktive
+        Farbe (Palette bleibt), wie die Firmware; LED on loescht nichts."""
         self.active = not self.active
         self.phase, self.wake, self.reads = "sleep", None, []
+        if not self.active:
+            self.clear_memory()
+            self.raw = None
+            if self.on_frame:
+                self.on_frame(self)
+
+    def rotate(self):
+        """LED rotation weiterschalten: 0, 90, 180, 270 Grad im Uhrzeigersinn."""
+        self.rotation = ESP_ROTATIONS[(ESP_ROTATIONS.index(self.rotation) + 1) % 4]
+        if self.on_frame:
+            self.on_frame(self)
+        return self.rotation
+
+    def led_rgb(self, X, Y):
+        """Farbe der LED an der Stelle (X, Y) des Geraets: wie pixel_rgb, aber gedreht
+        (Firmware rotation_map: Pixel (x, y) des aufrechten Bildes liegt auf der LED (X, Y))."""
+        r = self.rotation
+        if r == 90:
+            x, y = 7 - Y, X
+        elif r == 180:
+            x, y = 7 - X, 7 - Y
+        elif r == 270:
+            x, y = Y, 7 - X
+        else:
+            x, y = X, Y
+        return self.pixel_rgb(x, y)
 
     def redraw(self, notify=True):
         """Anzeige neu aufbauen: Pixel an -> Farbnummer, sonst None."""
@@ -766,6 +797,37 @@ class LedMatrix:
                 err += dx
                 y += sy
 
+    def _circle(self, r, art, filled, raute):
+        """ACK 9: Kreis (Mittelpunkt-Verfahren) oder Raute (|dx| + |dy| = r) um Cursor 1, wie
+        matrix_draw.py der Firmware. Jedes Pixel einmal; was ausserhalb liegt, faellt weg."""
+        rand = set()
+        if raute:
+            for a in range(r + 1):
+                b = r - a
+                rand.update(((a, b), (-a, b), (a, -b), (-a, -b)))
+        x, y, d = r, 0, 1 - r
+        while x >= y and not raute:
+            for a, b in ((x, y), (y, x)):
+                rand.update(((a, b), (-a, b), (a, -b), (-a, -b)))
+            y += 1
+            if d < 0:
+                d += 2 * y + 1
+            else:
+                x -= 1
+                d += 2 * (y - x) + 1
+        if filled:                            # je Zeile vom linken bis zum rechten Rand
+            breite = {}
+            for a, b in rand:
+                if breite.get(b, -1) < a:
+                    breite[b] = a
+            punkte = [(a, b) for b in breite for a in range(-breite[b], breite[b] + 1)]
+        else:
+            punkte = rand
+        for a, b in punkte:
+            px, py = self.c1x + a, self.c1y + b
+            if 0 <= px < 8 and 0 <= py < 8:
+                self._apply(py * 8 + px, art)
+
     def _shift(self, r):
         d, wrap = r & 3, r & 8
         nb, nc = [0] * 64, list(self.colors)
@@ -827,6 +889,10 @@ class LedMatrix:
                 else:
                     self._rect(art, ack == 6)
             return art != 0
+        if ack == 9:                          # r, a: Kreis/Raute um Cursor 1, a+4 gefuellt, a+8 Raute
+            v = data[1]
+            self._circle(data[0] & 15, v & 3, v & 4, v & 8)
+            return (v & 3) != 0
         if ack == 3:
             art = data[0] & 3
             for i in range(64):
@@ -845,7 +911,7 @@ class LedMatrix:
         if ack == 14:
             self.paint = data[0] & 15
             return False
-        return False                          # ACK 2, 5, 9, 12: ohne Bedeutung, 15: Schlafen
+        return False                          # ACK 2, 5, 12: ohne Bedeutung, 15: Schlafen
 
     # ---- Handshake auf der simulierten Zeit ----
     def _start_req(self, t):
@@ -1716,6 +1782,8 @@ class Keyboard:
             return t
         if t in ("G", "H") and self.web_keys and self.web_keys():
             return "WEB" + t
+        if t == "M":
+            return "ROTATE"
         if len(t) == 1:
             lc = t.lower()
             if lc in HEXDIGITS:
@@ -2019,10 +2087,11 @@ class Emulator:
             if m.last_ack is not None:
                 status += f" A{m.last_ack}"               # letztes ACK
             status = f"{status} {m.receiving()}".rstrip()
-            top = "   " + "_" * 15                       # obere Begrenzung
+            top = "   " + (f" {m.rotation}\u00b0 ".center(15, "_") if m.rotation   # obere Begrenzung,
+                             else "_" * 15)                     # mit LED rotation
             sep = lambda y: " " if y == 0 else "."       # Reihe 1 ohne Trennpunkte
             dot = lambda rgb: " " if rgb is None else col_rgb(LED_CHAR if COLOR else "*", rgb)
-            rows = [f"{y + 1} |" + sep(y).join(dot(m.pixel_rgb(x, y)) for x in range(8)) + "|"
+            rows = [f"{y + 1} |" + sep(y).join(dot(m.led_rgb(x, y)) for x in range(8)) + "|"
                     for y in range(7, -1, -1)]
             bottom = "   " + BOTTOM_CHAR * 15              # untere Begrenzung
             title = "MATRIX ESP" + (
@@ -2137,7 +2206,7 @@ class Emulator:
             "           h p n = Festprogramm: 3 Uhr stellen, 4 Uhr, 5 = 000, 6 = F01, 7 Nim",
             " Lauf:     Leertaste = Pause / weiter   0-9 a-f Keypad   Pfeile = Taster",
             " Emulator: l Laden  w Sichern  z Reset (Tempo bleibt)  t 1-4 Taster  q Ende",
-            "           v Ansicht: Programm / Matrix / Script   m Matrix aus <-> an",
+            "           v Ansicht: Programm / Matrix / Script   m Matrix aus <-> an   M Drehung",
             "           i Debug (HALT behaelt Timing)   u RND: mic = Zaehler, emu = Zufall",
             "           o Quellen: ^v Eingang, <> Quelle, +/- Takt, x loescht (2x = alle)",
             " Script:   y Laden (.py)  j Start/Stop  G/H mit Shift = Web-Tasten (im Lauf)",
@@ -2385,6 +2454,9 @@ class Emulator:
             m.toggle()
             self.msg = ("Matrix an: ESP2090-Studio (REQ/ACK, Blockmodus ACK 1 und Zeichenbefehle)"
                         if m.active else "Matrix aus")
+            return True
+        if k == "ROTATE":                                 # Shift+M: LED rotation wie die Weboberflaeche
+            self.msg = f"LED rotation {self.matrix.rotate()} Grad (dreht nur die LEDs)"
             return True
         if k == "DEBUG":
             self.debug = not self.debug
